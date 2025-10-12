@@ -8,14 +8,14 @@
 
 ## Environment Setup
 - Use Python 3.12 via `uv`. Create an environment with `uv venv` and install extras with `uv pip install -e ".[dev]"`.
-- When invoking Python directly, prefer the project venv binary at `/Users/shanesegal/projects/trm/.venv/bin/python` to match CI.
+- Let `.envrc`/`direnv` or `uv run` activate the correct virtualenv; avoid hardcoding absolute venv paths in scripts or docs.
 - Nix users can run `nix develop` to enter the pinned toolchain; commit updated lockfiles whenever they change.
 
 ## Build, Test, and Development Commands
 - `uv run pytest` — executes the full test suite with verbose output and coverage against `src`.
 - `uv run ruff check .` — lint the codebase using the shared `pyproject.toml` configuration.
 - `uv run ruff format .` — auto-format; run before committing.
-- `/Users/shanesegal/projects/trm/.venv/bin/python -m basedpyright` — perform type checks with the stricter fork we standardize on.
+- `uv run basedpyright` — perform type checks with the stricter fork we standardize on.
 
 ## Coding Style & Naming Conventions
 - Ruff enforces line length ≤ 120, explicit imports, and allows `torch.nn.functional as F`; keep modules importable and lightweight.
@@ -39,3 +39,10 @@
 - `jj status` reveals working-copy changes, and `jj diff` shows the staged diff before committing.
 - Create commits with `jj commit -m "Descriptive message"`; ensure the working copy (`@`) is clean before handing off.
 - The project history expects short, imperative commit messages—mirror the existing style when crafting new commits.
+
+## Feature Development Workflow
+- When implementing a significant feature, create a dedicated `jj workspace` in a sibling directory (e.g., `jj workspace add ../feature-name`). Work there until the feature is ready to merge back.
+- Reuse the existing `uv`-managed virtualenv for testing. Adjust `PYTHONPATH` or use `uv run` so the editable install resolves modules from your workspace.
+- If the feature requires divergent dependency versions, create an additional environment via `uv venv` scoped to that workspace. Document why the extra environment is necessary.
+- Always manage virtual environments with `uv`; keep `.envrc` in sync so contributors automatically load the intended toolchain.
+- Do not introduce hardcoded virtualenv paths—rely on environment activation (`direnv`, `uv run`, `source .venv/bin/activate`) to locate executables.
