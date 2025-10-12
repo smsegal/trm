@@ -11,6 +11,9 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
+    "beartype>=0.22.2",
+    "einops>=0.8.1",
+    "jaxtyping>=0.3.3",
     "torch>=2.0.0",
 ]
 
@@ -26,6 +29,8 @@ dev = [
 [tool.ruff]
 line-length = 120
 target-version = "py312"
+
+[tool.ruff.lint]
 select = [
     "E",   # pycodestyle errors
     "F",   # pyflakes
@@ -40,16 +45,21 @@ ignore = [
     "E501",  # line too long, handled by ruff
     "E203",  # whitespace before ':', handled by ruff
     "N812",  # allow torch.nn.functional as F alias
+    "PLR0913" # too many function arguments
 ]
 
-[tool.ruff.mccabe]
+[tool.ruff.lint.mccabe]
 max-complexity = 10
 
-[tool.ruff.isort]
+[tool.ruff.lint.isort]
 known-first-party = ["trm"]
 
 [tool.ruff.lint.pep8-naming]
 ignore-names = ["F"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/trm/model.py" = ["F722"]
+"tests/test_model.py" = ["I001"]
 
 [tool.pyright]
 pythonVersion = "3.12"
@@ -57,7 +67,7 @@ typeCheckingMode = "standard"
 reportMissingTypeStubs = false
 venvPath = "."
 venv = ".venv"
-include = ["src", "tests"]
+include = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -67,3 +77,12 @@ addopts = "-v --cov=src --cov-report=term-missing"
 [tool.coverage.run]
 source = ["src"]
 omit = ["*/__init__.py", "*/tests/*"]
+
+[dependency-groups]
+dev = [
+    "basedpyright>=1.31.7",
+    "ruff>=0.14.0",
+]
+test = [
+    "pytest>=8.4.2",
+]
