@@ -42,6 +42,10 @@
 
 ## Feature Development Workflow
 - When implementing a significant feature, create a dedicated `jj workspace` in a sibling directory (e.g., `jj workspace add ../feature-name`). Work there until the feature is ready to merge back.
+- Use `jj workspace list` to confirm active workspaces and note that `jj log` will display workspace-specific commits as `<workspace>@` entries.
+- `jj workspace root` reports the filesystem root for the current workspace; use it when scripting or aligning tooling.
+- Keep workspace names meaningful; `jj workspace rename <new-name>` is available if requirements change, and `jj workspace forget <name>` removes stale entries once merged.
+- If a workspace reports as stale after upstream changes, run `jj workspace update-stale <name>` to resync its working-copy commit.
 - Reuse the existing `uv`-managed virtualenv for testing. Adjust `PYTHONPATH` or use `uv run` so the editable install resolves modules from your workspace.
 - If the feature requires divergent dependency versions, create an additional environment via `uv venv` scoped to that workspace. Document why the extra environment is necessary.
 - Always manage virtual environments with `uv`; keep `.envrc` in sync so contributors automatically load the intended toolchain.
