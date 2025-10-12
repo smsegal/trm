@@ -1,8 +1,7 @@
-from typing import cast
-
 import torch
 import torch.nn.functional as F
 from beartype import beartype
+from einops import rearrange
 from jaxtyping import Float, Int
 from torch import Tensor, nn
 
@@ -36,59 +35,6 @@ def apply_rotary_pos_emb(
     return (x * cos) + (_rotate_half(x) * sin)
 
 
-class RotaryEmbedding(nn.Module):
-    """Rotary positional embedding cache with on-demand expansion."""
-
-    def __init__(self, dim: int, base: float = 10000.0) -> None:
-        super().__init__()
-        if dim % 2 != 0:
-            raise ValueError("Rotary embedding dimension must be even.")
-        inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.float32) / dim))
-        self.register_buffer("inv_freq", inv_freq, persistent=False)
-        self.register_buffer("_cos_cached", torch.empty(0), persistent=False)
-        self.register_buffer("_sin_cached", torch.empty(0), persistent=False)
-        self.inv_freq: Tensor
-        self._cos_cached: Tensor
-        self._sin_cached: Tensor
-
-    def _maybe_update_cache(self, seq_len: int, device: torch.device, dtype: torch.dtype) -> None:
-        needs_update = (
-            self._cos_cached.numel() == 0
-            or self._cos_cached.size(0) < seq_len
-            or self._cos_cached.device != device
-            or self._cos_cached.dtype != dtype
-        )
-        if not needs_update:
-            return
-        inv_freq = cast(Tensor, self.inv_freq).to(device=device, dtype=dtype)
-        positions = torch.arange(seq_len, device=device, dtype=dtype)
-        freqs = torch.outer(positions, inv_freq)
-        cos = torch.cos(freqs)
-        sin = torch.sin(freqs)
-        cos = torch.repeat_interleave(cos, 2, dim=-1)
-        sin = torch.repeat_interleave(sin, 2, dim=-1)
-        self._cos_cached = cos
-        self._sin_cached = sin
-
-    @beartype
-    def forward(
-        self,
-        position_ids: Tokens,
-        *,
-        device: torch.device | None = None,
-        dtype: torch.dtype | None = None,
-    ) -> tuple[RotaryCache, RotaryCache]:
-        if position_ids.dim() != POSITION_ID_RANK:
-            raise ValueError("position_ids must have shape [batch, seq_len].")
-        device = device or position_ids.device
-        dtype = dtype or torch.float32
-        seq_len = int(position_ids.max().item()) + 1
-        self._maybe_update_cache(seq_len, device, dtype)
-        cos = self._cos_cached.to(dtype=dtype)[position_ids]
-        sin = self._sin_cached.to(dtype=dtype)[position_ids]
-        return cast(RotaryCache, cos), cast(RotaryCache, sin)
-
-
 class MLP(nn.Module):
     """SwiGLU MLP block used inside the transformer layer."""
 
@@ -104,7 +50,8 @@ class MLP(nn.Module):
         hidden, gate = self.fc1(x).chunk(2, dim=-1)
         x = F.silu(hidden) * gate
         x = self.fc2(x)
-        return cast(HiddenState, self.dropout(x))
+        hidden_state: HiddenState = self.dropout(x)
+        return hidden_state
 
 
 class TRMBlock(nn.Module):
@@ -144,21 +91,22 @@ class TRMBlock(nn.Module):
         sin: BroadcastRotaryCache,
     ) -> HiddenState:
         batch, seq_len, _ = hidden.shape
-        qkv = self.qkv(hidden)
-        q, k, v = qkv.chunk(3, dim=-1)
-
-        def reshape(t: Tensor) -> AttentionTensor:
-            return cast(AttentionTensor, t.view(batch, seq_len, self.num_heads, self.head_dim).transpose(1, 2))
-
-        q_heads = reshape(q)
-        k_heads = reshape(k)
-        v_heads = reshape(v)
+        qkv_heads = rearrange(
+            self.qkv(hidden),
+            "b s (qkv h d) -> qkv b h s d",
+            qkv=3,
+            h=self.num_heads,
+        )
+        qk_heads, v_heads = qkv_heads[:2], qkv_heads[2]
 
         cos_heads = cos[:, :, :seq_len, :].to(dtype=hidden.dtype)
         sin_heads = sin[:, :, :seq_len, :].to(dtype=hidden.dtype)
 
-        q_heads = apply_rotary_pos_emb(q_heads, cos_heads, sin_heads)
-        k_heads = apply_rotary_pos_emb(k_heads, cos_heads, sin_heads)
+        qk_heads = rearrange(qk_heads, "qk b h s d -> (qk b) h s d")
+        cos_qk = cos_heads.repeat(2, 1, 1, 1)
+        sin_qk = sin_heads.repeat(2, 1, 1, 1)
+        qk_heads = apply_rotary_pos_emb(qk_heads, cos_qk, sin_qk)
+        q_heads, k_heads = rearrange(qk_heads, "(qk b) h s d -> qk b h s d", qk=2, b=batch).unbind(dim=0)
 
         attn = F.scaled_dot_product_attention(
             q_heads,
@@ -166,8 +114,9 @@ class TRMBlock(nn.Module):
             v_heads,
             dropout_p=self.dropout if self.training else 0.0,
         )
-        attn = attn.transpose(1, 2).reshape(batch, seq_len, self.hidden_dim)
-        return cast(HiddenState, self.out_proj(attn))
+        attn = rearrange(attn, "b h s d -> b s (h d)")
+        hidden_state: HiddenState = self.out_proj(attn)
+        return hidden_state
 
     @beartype
     def forward(
@@ -179,13 +128,13 @@ class TRMBlock(nn.Module):
         sin: BroadcastRotaryCache,
     ) -> tuple[HiddenState, HiddenState]:
         z_norm = self.norm_z_attn(x + y + z)
-        z = cast(HiddenState, z + self._self_attention(z_norm, cos, sin))
-        z = cast(HiddenState, z + self.mlp_z(self.norm_z_mlp(z)))
+        z_attn: HiddenState = z + self._self_attention(z_norm, cos, sin)
+        z_mlp: HiddenState = z_attn + self.mlp_z(self.norm_z_mlp(z_attn))
 
-        y_norm = self.norm_y_attn(y + z)
-        y = cast(HiddenState, y + self._self_attention(y_norm, cos, sin))
-        y = cast(HiddenState, y + self.mlp_y(self.norm_y_mlp(y)))
-        return y, z
+        y_norm = self.norm_y_attn(y + z_mlp)
+        y_attn: HiddenState = y + self._self_attention(y_norm, cos, sin)
+        y_mlp: HiddenState = y_attn + self.mlp_y(self.norm_y_mlp(y_attn))
+        return y_mlp, z_mlp
 
 
 class TRM(nn.Module):
@@ -211,9 +160,35 @@ class TRM(nn.Module):
         self.q_head = nn.Linear(hidden_dim, 1)
 
         head_dim = hidden_dim // num_heads
-        self.pos_emb = RotaryEmbedding(head_dim, base=rope_base)
+        cos_cache, sin_cache = self._build_rotary_cache(
+            max_position_embeddings=max_position_embeddings,
+            head_dim=head_dim,
+            base=rope_base,
+        )
+        self.register_buffer("rotary_cos", cos_cache, persistent=False)
+        self.register_buffer("rotary_sin", sin_cache, persistent=False)
+        self.rotary_cos: Tensor
+        self.rotary_sin: Tensor
         self.layers = nn.ModuleList([TRMBlock(hidden_dim, num_heads, dropout=dropout) for _ in range(n_layers)])
         self.max_position_embeddings = max_position_embeddings
+
+    @staticmethod
+    def _build_rotary_cache(
+        *,
+        max_position_embeddings: int,
+        head_dim: int,
+        base: float,
+    ) -> tuple[Tensor, Tensor]:
+        if head_dim % 2 != 0:
+            raise ValueError("head_dim must be even for rotary embeddings.")
+        inv_freq = 1.0 / (base ** (torch.arange(0, head_dim, 2, dtype=torch.float32) / head_dim))
+        positions = torch.arange(max_position_embeddings, dtype=torch.float32)
+        freqs = torch.outer(positions, inv_freq)
+        cos = torch.cos(freqs)
+        sin = torch.sin(freqs)
+        cos = torch.repeat_interleave(cos, 2, dim=-1)
+        sin = torch.repeat_interleave(sin, 2, dim=-1)
+        return cos, sin
 
     @staticmethod
     @beartype
@@ -223,29 +198,31 @@ class TRM(nn.Module):
         embedding: nn.Embedding,
     ) -> HiddenState:
         if tensor is None:
-            return torch.zeros_like(reference)
+            zeros: HiddenState = torch.zeros_like(reference)
+            return zeros
         if tensor.dtype == torch.long:
-            return cast(HiddenState, embedding(tensor))
-        return cast(HiddenState, tensor)
+            embedded: HiddenState = embedding(tensor)
+            return embedded
+        hidden_tensor: HiddenState = tensor
+        return hidden_tensor
 
     @beartype
     def forward(
         self,
         x: Tokens | HiddenState,
-        y: Tokens | HiddenState | None = None,
+        y: Tokens | HiddenState,
         z: Tokens | HiddenState | None = None,
         position_ids: Tokens | None = None,
     ) -> tuple[HiddenState, HiddenState]:
+        x_embedded: HiddenState
         if x.dtype == torch.long:
-            x_embedded = cast(HiddenState, self.embedding(x))
+            x_embedded = self.embedding(x)
         else:
-            x_embedded = cast(HiddenState, x)
+            x_embedded = x
 
         batch, seq_len, _ = x_embedded.shape
         if seq_len > self.max_position_embeddings:
-            raise ValueError(
-                f"input sequence length {seq_len} exceeds maximum {self.max_position_embeddings}."
-            )
+            raise ValueError(f"input sequence length {seq_len} exceeds maximum {self.max_position_embeddings}.")
         y_tensor = self._prepare_inputs(y, x_embedded, self.embedding)
         z_tensor = self._prepare_inputs(z, x_embedded, self.embedding)
 
@@ -254,12 +231,27 @@ class TRM(nn.Module):
         if position_ids.size(1) < seq_len:
             raise ValueError("position_ids sequence length is shorter than input sequence length.")
 
-        cos, sin = self.pos_emb(position_ids, device=x_embedded.device, dtype=x_embedded.dtype)
-        cos = cos.unsqueeze(1)
-        sin = sin.unsqueeze(1)
+        if position_ids.dim() != POSITION_ID_RANK:
+            raise ValueError("position_ids must have shape [batch, seq_len].")
+        if position_ids.device != x_embedded.device:
+            position_ids = position_ids.to(x_embedded.device)
+        if position_ids.dtype != torch.long:
+            position_ids = position_ids.to(dtype=torch.long)
+        if int(position_ids.max().item()) >= self.max_position_embeddings:
+            raise ValueError("position_ids contain indices beyond the rotary cache.")
+
+        cos_cache: RotaryCache = self.rotary_cos[position_ids]
+        sin_cache: RotaryCache = self.rotary_sin[position_ids]
+        target_dtype = x_embedded.dtype
+        if cos_cache.dtype != target_dtype:
+            cos_cache = cos_cache.to(dtype=target_dtype)
+            sin_cache = sin_cache.to(dtype=target_dtype)
+
+        cos_broadcast = rearrange(cos_cache, "b s d -> b 1 s d")
+        sin_broadcast = rearrange(sin_cache, "b s d -> b 1 s d")
 
         for layer in self.layers:
-            y_tensor, z_tensor = layer(x_embedded, y_tensor, z_tensor, cos, sin)
+            y_tensor, z_tensor = layer(x_embedded, y_tensor, z_tensor, cos_broadcast, sin_broadcast)
         return y_tensor, z_tensor
 
     @beartype
@@ -291,6 +283,6 @@ class TRM(nn.Module):
             for _ in range(max(0, recurse - 1)):
                 y_state, z_state = self.latent_recursion(x, y_state, z_state, n, position_ids=position_ids)
         y_state, z_state = self.latent_recursion(x, y_state, z_state, n, position_ids=position_ids)
-        lm_logits = cast(LmLogits, self.lm_head(y_state))
-        q_logits = cast(HaltingLogits, self.q_head(y_state))
+        lm_logits: LmLogits = self.lm_head(y_state)
+        q_logits: HaltingLogits = self.q_head(y_state)
         return y_state.detach(), z_state.detach(), lm_logits, q_logits
