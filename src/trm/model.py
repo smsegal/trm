@@ -143,15 +143,13 @@ class TRM(nn.Module):
         n_layers: int,
         vocab_size: int,
         hidden_dim: int,
+        num_heads: int,
         *,
-        num_heads: int | None = None,
         max_position_embeddings: int = 2048,
         rope_base: float = 10000.0,
         dropout: float = 0.0,
     ) -> None:
         super().__init__()
-        if num_heads is None:
-            num_heads = max(1, hidden_dim // 64)
         if hidden_dim % num_heads != 0:
             raise ValueError("hidden_dim must be divisible by num_heads.")
 
@@ -190,51 +188,30 @@ class TRM(nn.Module):
         sin = torch.repeat_interleave(sin, 2, dim=-1)
         return cos, sin
 
-    @staticmethod
-    @beartype
-    def _prepare_inputs(
-        tensor: HiddenState | Tokens | None,
-        reference: HiddenState,
-        embedding: nn.Embedding,
-    ) -> HiddenState:
-        if tensor is None:
-            zeros: HiddenState = torch.zeros_like(reference)
-            return zeros
-        if tensor.dtype == torch.long:
-            embedded: HiddenState = embedding(tensor)
-            return embedded
-        hidden_tensor: HiddenState = tensor
-        return hidden_tensor
-
     @beartype
     def forward(
         self,
-        x: Tokens | HiddenState,
-        y: Tokens | HiddenState,
-        z: Tokens | HiddenState | None = None,
+        x: HiddenState,
+        y: HiddenState,
+        z: HiddenState | None = None,
         position_ids: Tokens | None = None,
     ) -> tuple[HiddenState, HiddenState]:
-        x_embedded: HiddenState
-        if x.dtype == torch.long:
-            x_embedded = self.embedding(x)
-        else:
-            x_embedded = x
-
-        batch, seq_len, _ = x_embedded.shape
+        batch, seq_len, _ = x.shape
         if seq_len > self.max_position_embeddings:
             raise ValueError(f"input sequence length {seq_len} exceeds maximum {self.max_position_embeddings}.")
-        y_tensor = self._prepare_inputs(y, x_embedded, self.embedding)
-        z_tensor = self._prepare_inputs(z, x_embedded, self.embedding)
+        
+        if z is None:
+            z = torch.zeros_like(x)
 
         if position_ids is None:
-            position_ids = torch.arange(seq_len, device=x_embedded.device).unsqueeze(0).expand(batch, -1)
+            position_ids = torch.arange(seq_len, device=x.device).unsqueeze(0).expand(batch, -1)
         if position_ids.size(1) < seq_len:
             raise ValueError("position_ids sequence length is shorter than input sequence length.")
 
         if position_ids.dim() != POSITION_ID_RANK:
             raise ValueError("position_ids must have shape [batch, seq_len].")
-        if position_ids.device != x_embedded.device:
-            position_ids = position_ids.to(x_embedded.device)
+        if position_ids.device != x.device:
+            position_ids = position_ids.to(x.device)
         if position_ids.dtype != torch.long:
             position_ids = position_ids.to(dtype=torch.long)
         if int(position_ids.max().item()) >= self.max_position_embeddings:
@@ -242,7 +219,7 @@ class TRM(nn.Module):
 
         cos_cache: RotaryCache = self.rotary_cos[position_ids]
         sin_cache: RotaryCache = self.rotary_sin[position_ids]
-        target_dtype = x_embedded.dtype
+        target_dtype = x.dtype
         if cos_cache.dtype != target_dtype:
             cos_cache = cos_cache.to(dtype=target_dtype)
             sin_cache = sin_cache.to(dtype=target_dtype)
@@ -251,8 +228,8 @@ class TRM(nn.Module):
         sin_broadcast = rearrange(sin_cache, "b s d -> b 1 s d")
 
         for layer in self.layers:
-            y_tensor, z_tensor = layer(x_embedded, y_tensor, z_tensor, cos_broadcast, sin_broadcast)
-        return y_tensor, z_tensor
+            y, z = layer(x, y, z, cos_broadcast, sin_broadcast)
+        return y, z
 
     @beartype
     def latent_recursion(

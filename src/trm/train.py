@@ -2,9 +2,8 @@
 
 import argparse
 from collections.abc import Sequence
-from dataclasses import fields, replace
 
-from trm.config import CONFIG_PRESETS, TrainingConfig
+from trm.config import CONFIG_PRESETS, TrainingConfig, apply_overrides
 from trm.training import run_training
 
 
@@ -47,15 +46,56 @@ def parse_args(argv: Sequence[str] | None = None) -> TrainingConfig:
     else:
         base_config = TrainingConfig()
 
-    overrides = {}
-    for field in fields(TrainingConfig):
-        value = getattr(args, field.name, None)
-        if value is not None:
-            overrides[field.name] = value
+    overrides: dict[str, object] = {}
 
-    config = replace(base_config, **overrides)
+    data_arg_map = {
+        "dataset_name": "dataset_name",
+        "split": "train_split",
+        "eval_split": "eval_split",
+    }
+    model_arg_map = {
+        "hidden_dim": "hidden_dim",
+        "n_layers": "n_layers",
+        "num_heads": "num_heads",
+        "dropout": "dropout",
+    }
+    training_arg_map = {
+        "batch_size": "batch_size",
+        "epochs": "epochs",
+        "learning_rate": "learning_rate",
+        "weight_decay": "weight_decay",
+        "max_grad_norm": "max_grad_norm",
+        "latent_steps": "latent_steps",
+        "recurse": "recurse",
+        "log_every": "log_every",
+        "max_train_samples": "max_train_samples",
+        "max_steps_per_epoch": "max_steps_per_epoch",
+        "max_eval_samples": "max_eval_samples",
+        "eval_batches": "eval_batches",
+        "seed": "seed",
+        "num_workers": "num_workers",
+        "device": "device",
+    }
+
+    for arg_name, override_key in data_arg_map.items():
+        value = getattr(args, arg_name, None)
+        if value is not None:
+            overrides[override_key] = value
+
+    for arg_name, override_key in model_arg_map.items():
+        value = getattr(args, arg_name, None)
+        if value is not None:
+            overrides[override_key] = value
+
+    for arg_name, override_key in training_arg_map.items():
+        value = getattr(args, arg_name, None)
+        if value is not None:
+            overrides[override_key] = value
+
     if args.streaming is not None:
-        config = replace(config, streaming=args.streaming)
+        overrides["streaming"] = args.streaming
+
+    config = apply_overrides(base_config, overrides)
     return config
 
 

@@ -1,13 +1,12 @@
 """Interactive CLI for viewing sudoku data and model predictions."""
 
 import argparse
-from dataclasses import fields, replace
 from pathlib import Path
 from typing import Sequence, Set
 
 import torch
 
-from .config import CONFIG_PRESETS, TrainingConfig
+from .config import CONFIG_PRESETS, TrainingConfig, apply_overrides
 from .data import decode_board
 from .display import console, render_sudoku
 from .inspection import SudokuSample, pull_sudoku_samples
@@ -15,21 +14,31 @@ from .training import build_model, resolve_device
 
 
 def _build_config(args: argparse.Namespace) -> TrainingConfig:
-    if args.config is not None:
-        base = CONFIG_PRESETS[args.config]()
-    else:
-        base = TrainingConfig()
+    base = CONFIG_PRESETS[args.config]() if args.config is not None else TrainingConfig()
 
-    overrides = {}
-    for field in fields(TrainingConfig):
-        if field.name in {"epochs", "max_train_samples", "max_steps_per_epoch", "eval_split", "max_eval_samples", "eval_batches"}:
-            continue
-        if hasattr(args, field.name):
-            value = getattr(args, field.name)
-            if value is not None:
-                overrides[field.name] = value
-    config = replace(base, **overrides)
-    return config
+    overrides: dict[str, object] = {}
+    if args.dataset_name is not None:
+        overrides["dataset_name"] = args.dataset_name
+    if args.split is not None:
+        overrides["train_split"] = args.split
+    if args.seed is not None:
+        overrides["seed"] = args.seed
+    if args.hidden_dim is not None:
+        overrides["hidden_dim"] = args.hidden_dim
+    if args.n_layers is not None:
+        overrides["n_layers"] = args.n_layers
+    if args.num_heads is not None:
+        overrides["num_heads"] = args.num_heads
+    if args.latent_steps is not None:
+        overrides["latent_steps"] = args.latent_steps
+    if args.recurse is not None:
+        overrides["recurse"] = args.recurse
+    if args.dropout is not None:
+        overrides["dropout"] = args.dropout
+    if args.device is not None:
+        overrides["device"] = args.device
+
+    return apply_overrides(base, overrides)
 
 
 def _load_model(config: TrainingConfig, checkpoint: Path | None, device: torch.device) -> torch.nn.Module:

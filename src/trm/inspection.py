@@ -6,12 +6,12 @@ from typing import Any, Sequence
 
 from datasets import Dataset, load_dataset
 
-from .config import TrainingConfig
+from .config import TrainingConfig, apply_overrides
 from .data import (
     ENCODED_PUZZLE_COLUMN,
     ENCODED_SOLUTION_COLUMN,
-    RAW_PUZZLE_COLUMN,
-    RAW_SOLUTION_COLUMN,
+    PUZZLE_TEXT_COLUMN,
+    SOLUTION_TEXT_COLUMN,
     decode_board,
     encode_board,
     format_board,
@@ -31,20 +31,20 @@ class SudokuSample:
 
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> "SudokuSample":
-        question = _require_string(row, RAW_PUZZLE_COLUMN)
-        answer = _require_string(row, RAW_SOLUTION_COLUMN)
+        question = _require_string(row, PUZZLE_TEXT_COLUMN)
+        answer = _require_string(row, SOLUTION_TEXT_COLUMN)
         source = str(row.get("source", "unknown"))
         rating_value = row.get("rating", "unknown")
         rating = str(rating_value)
         try:
             encoded_puzzle = encode_board(question)
         except ValueError as exc:
-            msg = f"Failed to encode {RAW_PUZZLE_COLUMN!r} for round-trip validation: {exc}"
+            msg = f"Failed to encode {PUZZLE_TEXT_COLUMN!r} for round-trip validation: {exc}"
             raise ValueError(msg) from exc
         try:
             encoded_solution = encode_board(answer)
         except ValueError as exc:
-            msg = f"Failed to encode {RAW_SOLUTION_COLUMN!r} for round-trip validation: {exc}"
+            msg = f"Failed to encode {SOLUTION_TEXT_COLUMN!r} for round-trip validation: {exc}"
             raise ValueError(msg) from exc
         return cls(
             source=source,
@@ -60,8 +60,8 @@ class SudokuSample:
         return {
             "source": self.source,
             "rating": self.rating,
-            RAW_PUZZLE_COLUMN: self.question,
-            RAW_SOLUTION_COLUMN: self.answer,
+            PUZZLE_TEXT_COLUMN: self.question,
+            SOLUTION_TEXT_COLUMN: self.answer,
             ENCODED_PUZZLE_COLUMN: self.encoded_puzzle,
             ENCODED_SOLUTION_COLUMN: self.encoded_solution,
         }
@@ -127,12 +127,14 @@ def preview_samples(config: TrainingConfig, *, count: int) -> list[SudokuSample]
 
 
 def _build_config_from_args(args: argparse.Namespace) -> TrainingConfig:
-    config = TrainingConfig(
-        dataset_name=args.dataset_name,
-        split=args.split,
-        seed=args.seed,
-    )
-    return config
+    overrides: dict[str, object] = {}
+    if args.dataset_name is not None:
+        overrides["dataset_name"] = args.dataset_name
+    if args.split is not None:
+        overrides["train_split"] = args.split
+    if args.seed is not None:
+        overrides["seed"] = args.seed
+    return apply_overrides(TrainingConfig(), overrides)
 
 
 def main(argv: Sequence[str] | None = None) -> None:

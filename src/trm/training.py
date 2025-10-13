@@ -17,8 +17,7 @@ from .data import (
     SUDOKU_SEQ_LEN,
     build_dataloader,
     decode_board,
-    prepare_dataset,
-    prepare_eval_dataset,
+    prepare_ds,
 )
 from .display import console, render_sudoku
 from .model import TRM
@@ -38,13 +37,14 @@ def resolve_device(device_option: str) -> torch.device:
 
 def build_model(config: TrainingConfig) -> TRM:
     vocab_size = len(BOARD_VOCAB)
+    model_config = config.model
     model = TRM(
-        n_layers=config.n_layers,
+        n_layers=model_config.n_layers,
         vocab_size=vocab_size,
-        hidden_dim=config.hidden_dim,
-        num_heads=config.num_heads,
+        hidden_dim=model_config.hidden_dim,
+        num_heads=model_config.num_heads,
         max_position_embeddings=SUDOKU_SEQ_LEN,
-        dropout=config.dropout,
+        dropout=model_config.dropout,
     )
     return model
 
@@ -124,29 +124,31 @@ class CheckpointManager:
 def training_step(
     model: TRM,
     optimizer: torch.optim.Optimizer,
-    puzzles: Tensor,
-    solutions: Tensor,
+    x: Tensor,
+    y_true: Tensor,
     *,
     config: TrainingConfig,
 ) -> tuple[float, Tensor | float]:
-    x_hidden = model.embedding(puzzles)
+    x_hidden = model.embedding(x)
     zeros = torch.zeros_like(x_hidden)
-    _, _, lm_logits, halting_logits = model.deep_recursion(
+    y, z, y_hat, q_hat = model.deep_recursion(
         x_hidden,
         zeros,
         zeros,
-        n=config.latent_steps,
-        recurse=config.recurse,
+        n=config.model.latent_steps,
+        recurse=config.model.recurse,
     )
-    loss = F.cross_entropy(
-        lm_logits.reshape(-1, lm_logits.size(-1)),
-        solutions.view(-1),
+    loss_class = F.cross_entropy(
+        y_hat.reshape(-1, y_hat.size(-1)),
+        y_true.view(-1),
     )
-    optimizer.zero_grad()
+    loss_halt = F.binary_cross_entropy(q_hat.squeeze(dim=-1), (y_hat.argmax(dim=-1) == y_true))
+    loss = loss_class + loss_halt
     loss.backward()
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=config.max_grad_norm)
     optimizer.step()
-    return float(loss.item()), halting_logits
+    optimizer.zero_grad()
+    return float(loss.item()), q_hat
 
 
 @torch.no_grad()
@@ -176,8 +178,8 @@ def evaluate(
             x_hidden,
             zeros,
             zeros,
-            n=config.latent_steps,
-            recurse=config.recurse,
+            n=config.model.latent_steps,
+            recurse=config.model.recurse,
         )
         loss = F.cross_entropy(
             lm_logits.reshape(-1, lm_logits.size(-1)),
@@ -214,11 +216,7 @@ def evaluate(
         for index, (puzzle_tokens, solution_tokens, prediction_tokens) in enumerate(preview_examples, start=1):
             puzzle_board = decode_board(puzzle_tokens)
             prediction_display_tokens = prediction_tokens.copy()
-            given_indices = {
-                idx
-                for idx, token in enumerate(puzzle_tokens)
-                if token != EMPTY_TOKEN_ID
-            }
+            given_indices = {idx for idx, token in enumerate(puzzle_tokens) if token != EMPTY_TOKEN_ID}
             for idx in given_indices:
                 prediction_display_tokens[idx] = puzzle_tokens[idx]
             prediction_board = decode_board(prediction_display_tokens)
@@ -259,22 +257,18 @@ def evaluate(
 
 def run_training(config: TrainingConfig) -> None:
     torch.manual_seed(config.seed)
-    dataset = prepare_dataset(config)
     device = resolve_device(config.device)
+    dataset = prepare_ds(
+        name=config.data.dataset_name, split="train", columns=config.data.columns, stream=config.data.streaming
+    )
     model = build_model(config).to(device)
 
     steps_per_epoch_estimate: int | None = None
     if config.max_steps_per_epoch is not None:
         steps_per_epoch_estimate = config.max_steps_per_epoch
     else:
-        dataset_length = getattr(dataset, "num_rows", None)
-        if dataset_length is None:
-            try:
-                dataset_length = len(dataset)  # type: ignore[arg-type]
-            except (TypeError, AttributeError):
-                dataset_length = None
-        if isinstance(dataset_length, int) and dataset_length > 0:
-            steps_per_epoch_estimate = math.ceil(dataset_length / config.batch_size)
+        dataset_length = len(dataset)
+        steps_per_epoch_estimate = math.ceil(dataset_length / config.batch_size)
 
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -292,12 +286,12 @@ def run_training(config: TrainingConfig) -> None:
         )
 
     eval_dataset = None
-    if config.eval_split is not None and not config.streaming:
-        eval_dataset = prepare_eval_dataset(config)
+    if config.data.eval_split is not None and not config.data.streaming:
+        eval_dataset = prepare_ds(config.data.dataset_name, config.data.eval_split, columns=config.data.columns)
 
     for epoch in range(config.epochs):
         model.train()
-        dataloader = build_dataloader(dataset, config=config)
+        dataloader = build_dataloader(dataset, batch_size=config.batch_size, device=device)
         loss_window: deque[float] = deque(maxlen=max(1, config.log_every))
         time_window: deque[float] = deque(maxlen=max(1, config.log_every))
         steps = 0
@@ -311,15 +305,13 @@ def run_training(config: TrainingConfig) -> None:
             dynamic_ncols=True,
         )
         try:
-            for batch_puzzles, batch_solutions in progress_bar:
+            for x_input, y_labels in progress_bar:
                 step_start = perf_counter()
-                puzzles = batch_puzzles.to(device)
-                solutions = batch_solutions.to(device)
                 loss, halting_logits = training_step(
                     model,
                     optimizer,
-                    puzzles,
-                    solutions,
+                    x_input,
+                    y_labels,
                     config=config,
                 )
                 step_duration = perf_counter() - step_start
@@ -336,16 +328,22 @@ def run_training(config: TrainingConfig) -> None:
                     halting_metric = float(halting_logits.detach().max().item())
                 else:
                     halting_metric = float(halting_logits)
-                if halting_metric > 0 and config.max_steps_per_epoch is not None and steps >= config.max_steps_per_epoch:
+                if (
+                    halting_metric > 0
+                    and config.max_steps_per_epoch is not None
+                    and steps >= config.max_steps_per_epoch
+                ):
                     break
         finally:
             progress_bar.close()
 
-        if config.eval_split is not None:
-            if config.streaming:
-                eval_dataset = prepare_eval_dataset(config)
+        if config.data.eval_split is not None:
             assert eval_dataset is not None
-            eval_loader = build_dataloader(eval_dataset, config=config)
+            eval_loader = build_dataloader(
+                eval_dataset,
+                batch_size=config.batch_size,
+                device=device,
+            )
             epoch_metrics = evaluate(
                 model,
                 eval_loader,
