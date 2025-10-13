@@ -42,7 +42,7 @@ SudokuDatasetConfig = DataConfig(
     dataset_name="sapientinc/sudoku-extreme",
     train_split="train",
     eval_split="test",
-    columns={"question": "x", "answer": "y"},
+    columns={"x": "question", "y": "answer"},
 )
 
 

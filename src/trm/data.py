@@ -2,6 +2,7 @@
 
 import os
 from collections.abc import Sequence
+from typing import Callable
 
 import torch
 from datasets import Dataset, load_dataset
@@ -30,20 +31,28 @@ def decode_board(tokens: Sequence[int]) -> str:
     return "".join(characters)
 
 
+def tokenize(examples: dict[str, list[str]], columns: dict[str, str]) -> dict[str, list[list[int]]]:
+    return {
+        new_col: [[TOKEN_LOOKUP[t] for t in text] for text in examples[original_col]]
+        for new_col, original_col in columns.items()
+    }
+
+
 def prepare_ds(
     name: str,
     split: str,
     columns: dict[str, str],
+    mapper: Callable,
     stream: bool = False,
+    num_proc: int = -1,
     seed: int | None = None,
 ):
     dataset = load_dataset(name, split=split, streaming=stream)
     assert isinstance(dataset, Dataset)
-    
-    # Keep only columns that are in the mapping
-    cols_to_remove = [col for col in dataset.column_names if col not in columns]
-    dataset = dataset.remove_columns(cols_to_remove).rename_columns(columns).shuffle(seed)
-    
+    if num_proc == -1:
+        # if os.cpu_count can't return a count, just assume 0?
+        num_proc = os.cpu_count() or 0
+    dataset = dataset.map(mapper, fn_kwargs={"columns": columns}, num_proc=num_proc, batched=True).shuffle(seed)
     return dataset
 
 

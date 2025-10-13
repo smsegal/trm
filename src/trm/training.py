@@ -12,13 +12,7 @@ from torch import Tensor
 from tqdm.auto import tqdm
 
 from .config import TrainingConfig
-from .data import (
-    BOARD_VOCAB,
-    SUDOKU_SEQ_LEN,
-    build_dataloader,
-    decode_board,
-    prepare_ds,
-)
+from .data import BOARD_VOCAB, SUDOKU_SEQ_LEN, build_dataloader, decode_board, prepare_ds, tokenize
 from .display import console, render_sudoku
 from .model import TRM
 
@@ -259,7 +253,11 @@ def run_training(config: TrainingConfig) -> None:
     torch.manual_seed(config.seed)
     device = resolve_device(config.device)
     dataset = prepare_ds(
-        name=config.data.dataset_name, split="train", columns=config.data.columns, stream=config.data.streaming
+        name=config.data.dataset_name,
+        split="train",
+        columns=config.data.columns,
+        stream=config.data.streaming,
+        mapper=tokenize,
     )
     model = build_model(config).to(device)
 
