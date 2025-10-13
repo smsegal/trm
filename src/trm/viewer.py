@@ -6,15 +6,12 @@ from pathlib import Path
 from typing import Sequence, Set
 
 import torch
-from rich.console import Console
-from rich.panel import Panel
 
 from .config import CONFIG_PRESETS, TrainingConfig
 from .data import decode_board
+from .display import console, render_sudoku
 from .inspection import SudokuSample, pull_sudoku_samples
 from .training import build_model, resolve_device
-
-console = Console()
 
 
 def _build_config(args: argparse.Namespace) -> TrainingConfig:
@@ -79,87 +76,20 @@ def _predict_solution(
     return predicted_board, accuracy, mismatch_indices
 
 
-def _stylize_cell(char: str, *, style: str | None) -> str:
-    if style is None:
-        return char
-    return f"[{style}]{char}[/]"
-
-
-def _format_sudoku_ascii(
-    board: str,
-    *,
-    highlight: Set[int] | None = None,
-    puzzle: bool = False,
-) -> str:
-    highlight = highlight or set()
-    rows = [board[i : i + 9] for i in range(0, len(board), 9)]
-
-    top = "┌───────┬───────┬───────┐"
-    inner = "├───────┼───────┼───────┤"
-    bold_inner = "├═══════╪═══════╪═══════┤"
-    bottom = "└───────┴───────┴───────┘"
-
-    lines: list[str] = [top]
-    for row_idx, row in enumerate(rows):
-        cells: list[str] = []
-        for col_idx, char in enumerate(row):
-            flat_idx = row_idx * 9 + col_idx
-            base = "·" if char == "." else char
-            style: str | None = None
-            if char == ".":
-                style = "dim"
-            elif puzzle:
-                style = "bold"
-            if flat_idx in highlight:
-                style = "bold red"
-            cells.append(_stylize_cell(base, style=style))
-        left = " ".join(cells[:3])
-        middle = " ".join(cells[3:6])
-        right = " ".join(cells[6:])
-        lines.append(f"│ {left} │ {middle} │ {right} │")
-
-        if row_idx == len(rows) - 1:
-            continue
-        if (row_idx + 1) % 3 == 0:
-            lines.append(bold_inner)
-        else:
-            lines.append(inner)
-    lines.append(bottom)
-    return "\n".join(lines)
-
-
-def _render_board(
-    board: str,
-    *,
-    title: str,
-    highlight: Set[int] | None = None,
-    puzzle: bool = False,
-    border_style: str = "blue",
-) -> None:
-    ascii_board = _format_sudoku_ascii(board, highlight=highlight, puzzle=puzzle)
-    panel = Panel.fit(
-        ascii_board,
-        title=title,
-        border_style=border_style,
-        padding=(0, 2),
-    )
-    console.print(panel)
-
-
 def _print_sample(sample: SudokuSample) -> None:
     console.print(f"[bold]Source:[/] {sample.source}")
     console.print(f"[bold]Rating:[/] {sample.rating}")
-    _render_board(sample.question, title="Puzzle", puzzle=True, border_style="cyan")
+    render_sudoku(sample.question, title="Puzzle", puzzle=True, border_style="cyan")
 
 
 def _print_solution(sample: SudokuSample) -> None:
-    _render_board(sample.answer, title="Solution", border_style="green")
+    render_sudoku(sample.answer, title="Solution", border_style="green")
 
 
 def _print_prediction(predicted: str, sample: SudokuSample, accuracy: float, mismatches: Set[int]) -> None:
-    _render_board(predicted, title="Model Prediction", highlight=mismatches, border_style="magenta")
+    render_sudoku(predicted, title="Model Prediction", highlight=mismatches, border_style="magenta")
     console.print(f"[bold]Cell accuracy:[/] {accuracy * 100:.2f}%")
-    _render_board(sample.answer, title="Ground Truth", border_style="green")
+    render_sudoku(sample.answer, title="Ground Truth", border_style="green")
 
 
 def _interactive_loop(

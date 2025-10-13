@@ -14,10 +14,10 @@ from .data import (
     SUDOKU_SEQ_LEN,
     build_dataloader,
     decode_board,
-    format_board,
     prepare_dataset,
     prepare_eval_dataset,
 )
+from .display import console, render_sudoku
 from .model import TRM
 
 
@@ -205,19 +205,20 @@ def evaluate(
     metrics = {"loss": mean_loss, "cell_accuracy": accuracy}
 
     if preview_examples:
-        print("Evaluation samples:")
+        console.print("[bold]Evaluation samples:[/bold]")
         for index, (puzzle_tokens, solution_tokens, prediction_tokens) in enumerate(preview_examples, start=1):
             puzzle_board = decode_board(puzzle_tokens)
             prediction_board = decode_board(prediction_tokens)
             solution_board = decode_board(solution_tokens)
-            print(f"Sample {index}:")
-            print("Puzzle:")
-            print(format_board(puzzle_board))
-            print("Predicted:")
-            print(format_board(prediction_board))
-            print("Solution:")
-            print(format_board(solution_board))
-            print()
+            mismatches = {
+                idx
+                for idx, (pred_token, sol_token) in enumerate(zip(prediction_tokens, solution_tokens))
+                if pred_token != sol_token
+            }
+            console.print(f"[dim]Sample {index}[/dim]")
+            render_sudoku(puzzle_board, title="Puzzle", puzzle=True, border_style="cyan")
+            render_sudoku(prediction_board, title="Prediction", highlight=mismatches, border_style="magenta")
+            render_sudoku(solution_board, title="Solution", border_style="green")
     return metrics
 
 
