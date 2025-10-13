@@ -22,19 +22,16 @@ dependencies = [
     "wandb>=0.22.2",
 ]
 
+[project.optional-dependencies]
+test = [
+    "pytest>=8.4.2",
+]
+
+
 [project.scripts]
 trm-train = "trm.train:main"
 trm-inspect = "trm.inspection:main"
 trm-viewer = "trm.viewer:main"
-
-[project.optional-dependencies]
-dev = [
-    "pytest>=7.0.0",
-    "pytest-cov>=4.0.0",
-    "ruff>=0.0.280",
-    "pyright>=1.1.380",
-    "pre-commit>=3.0.0",
-]
 
 [tool.ruff]
 line-length = 120
@@ -91,8 +88,7 @@ omit = ["*/__init__.py", "*/tests/*"]
 [dependency-groups]
 dev = [
     "basedpyright>=1.31.7",
+    "ipykernel>=7.0.0",
+    "ipywidgets>=8.1.7",
     "ruff>=0.14.0",
-]
-test = [
-    "pytest>=8.4.2",
 ]

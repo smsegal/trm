@@ -42,7 +42,7 @@
 - The project history expects short, imperative commit messages—mirror the existing style when crafting new commits.
 
 ## Feature Development Workflow
-- When implementing a significant feature, create a dedicated `jj workspace` in a sibling directory (e.g., `jj workspace add ../feature-name`). Work there until the feature is ready to merge back.
+- When implementing a feature, create a dedicated `jj workspace` in a sibling directory (e.g., `jj workspace add ../feature-name`). Work there until the feature is ready to merge back.
 - Use `jj workspace list` to confirm active workspaces and note that `jj log` will display workspace-specific commits as `<workspace>@` entries.
 - `jj workspace root` reports the filesystem root for the current workspace; use it when scripting or aligning tooling.
 - Keep workspace names meaningful; `jj workspace rename <new-name>` is available if requirements change, and `jj workspace forget <name>` removes stale entries once merged.

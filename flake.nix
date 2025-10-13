@@ -26,7 +26,7 @@
 
             shellHook = ''
               unset PYTHONPATH
-              uv sync --extra dev
+              uv sync --extra test --dev
               . .venv/bin/activate
             '';
           };
