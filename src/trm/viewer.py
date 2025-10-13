@@ -2,7 +2,7 @@
 
 import argparse
 from pathlib import Path
-from typing import Sequence, Set
+from typing import Sequence, Set, cast
 
 import torch
 
@@ -10,11 +10,15 @@ from .config import CONFIG_PRESETS, TrainingConfig, apply_overrides
 from .data import decode_board
 from .display import console, render_sudoku
 from .inspection import SudokuSample, pull_sudoku_samples
+from .model import TRM
 from .training import build_model, resolve_device
 
 
 def _build_config(args: argparse.Namespace) -> TrainingConfig:
-    base = CONFIG_PRESETS[args.config]() if args.config is not None else TrainingConfig()
+    if args.config is not None:
+        base = CONFIG_PRESETS[args.config].build()
+    else:
+        base = TrainingConfig()
 
     overrides: dict[str, object] = {}
     if args.dataset_name is not None:
@@ -41,8 +45,8 @@ def _build_config(args: argparse.Namespace) -> TrainingConfig:
     return apply_overrides(base, overrides)
 
 
-def _load_model(config: TrainingConfig, checkpoint: Path | None, device: torch.device) -> torch.nn.Module:
-    model = build_model(config).to(device)
+def _load_model(config: TrainingConfig, checkpoint: Path | None, device: torch.device) -> TRM:
+    model = cast(TRM, build_model(config).to(device))
     if checkpoint is None:
         model.eval()
         return model
@@ -58,7 +62,7 @@ def _load_model(config: TrainingConfig, checkpoint: Path | None, device: torch.d
 
 
 def _predict_solution(
-    model: torch.nn.Module,
+    model: TRM,
     sample: SudokuSample,
     *,
     device: torch.device,
@@ -103,7 +107,7 @@ def _print_prediction(predicted: str, sample: SudokuSample, accuracy: float, mis
 
 def _interactive_loop(
     samples: list[SudokuSample],
-    model: torch.nn.Module,
+    model: TRM,
     *,
     device: torch.device,
     config: TrainingConfig,

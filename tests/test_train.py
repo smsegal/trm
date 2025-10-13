@@ -419,3 +419,19 @@ def test_parse_args_supports_presets() -> None:
     config = parse_args(["--config", "gpu", "--batch-size", "64"])
     assert config.device == "cuda"
     assert config.batch_size == 64
+
+
+def test_parse_args_supports_preset_subcommands() -> None:
+    config = parse_args(["macbook"])
+    assert config.batch_size == 16
+    assert config.learning_rate == 5e-4
+
+    config = parse_args(["gpu"])
+    assert config.device == "cuda"
+    assert config.keep_last_n_checkpoints == 4
+
+
+def test_parse_args_overrides_apply_to_presets() -> None:
+    config = parse_args(["gpu", "--batch-size", "32", "--streaming"])
+    assert config.batch_size == 32
+    assert config.streaming

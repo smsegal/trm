@@ -1,101 +1,59 @@
 """CLI entrypoint for running TRM training jobs."""
 
-import argparse
 from collections.abc import Sequence
+import sys
 
-from trm.config import CONFIG_PRESETS, TrainingConfig, apply_overrides
+import tyro
+
+from trm.config import TrainingConfig, iter_cli_config_options
 from trm.training import run_training
+
+_CONFIG_PREFIX_FLAGS = {"--config", "-c"}
+
+
+def _normalize_cli_args(argv: Sequence[str] | None) -> list[str]:
+    """Normalize legacy flags into Tyro subcommand arguments."""
+    raw_args = list(sys.argv[1:] if argv is None else argv)
+    if not raw_args:
+        return ["default"]
+
+    config_name: str | None = None
+    remaining: list[str] = []
+    i = 0
+    while i < len(raw_args):
+        arg = raw_args[i]
+        if arg in _CONFIG_PREFIX_FLAGS:
+            if i + 1 >= len(raw_args):
+                raise SystemExit("--config flag requires a value.")
+            config_name = raw_args[i + 1]
+            i += 2
+            continue
+        if arg.startswith("--config="):
+            config_name = arg.split("=", 1)[1]
+            i += 1
+            continue
+        remaining.append(arg)
+        i += 1
+
+    if config_name is not None:
+        remaining.insert(0, config_name)
+
+    if not remaining or remaining[0].startswith("-"):
+        remaining.insert(0, "default")
+
+    return remaining
 
 
 def parse_args(argv: Sequence[str] | None = None) -> TrainingConfig:
-    parser = argparse.ArgumentParser(description="Train TRM on the sudoku-extreme dataset.")
-    parser.add_argument(
-        "--config",
-        type=str,
-        choices=sorted(CONFIG_PRESETS),
-        default="macbook",
-        help="Choose a preset configuration (default, macbook, gpu).",
+    """Parse CLI arguments into a TrainingConfig using Tyro."""
+    config_options = iter_cli_config_options()
+    tyro_args = _normalize_cli_args(argv)
+    return tyro.extras.overridable_config_cli(
+        config_options,
+        prog="trm-train",
+        description="Train TRM on the sudoku-extreme dataset.",
+        args=tyro_args,
     )
-    parser.add_argument("--dataset-name", type=str)
-    parser.add_argument("--split", type=str)
-    parser.add_argument("--batch-size", type=int)
-    parser.add_argument("--epochs", type=int)
-    parser.add_argument("--learning-rate", type=float)
-    parser.add_argument("--weight-decay", type=float)
-    parser.add_argument("--max-grad-norm", type=float)
-    parser.add_argument("--hidden-dim", type=int)
-    parser.add_argument("--n-layers", type=int)
-    parser.add_argument("--num-heads", type=int)
-    parser.add_argument("--dropout", type=float)
-    parser.add_argument("--latent-steps", type=int)
-    parser.add_argument("--recurse", type=int)
-    parser.add_argument("--log-every", type=int)
-    parser.add_argument("--max-train-samples", type=int)
-    parser.add_argument("--max-steps-per-epoch", type=int)
-    parser.add_argument("--eval-split", type=str)
-    parser.add_argument("--max-eval-samples", type=int)
-    parser.add_argument("--eval-batches", type=int)
-    parser.add_argument("--streaming", action=argparse.BooleanOptionalAction, default=None)
-    parser.add_argument("--seed", type=int)
-    parser.add_argument("--num-workers", type=int)
-    parser.add_argument("--device", type=str)
-
-    args = parser.parse_args(argv)
-
-    if args.config is not None:
-        base_config = CONFIG_PRESETS[args.config]()
-
-    overrides: dict[str, object] = {}
-
-    data_arg_map = {
-        "dataset_name": "dataset_name",
-        "split": "train_split",
-        "eval_split": "eval_split",
-    }
-    model_arg_map = {
-        "hidden_dim": "hidden_dim",
-        "n_layers": "n_layers",
-        "num_heads": "num_heads",
-        "dropout": "dropout",
-    }
-    training_arg_map = {
-        "batch_size": "batch_size",
-        "epochs": "epochs",
-        "learning_rate": "learning_rate",
-        "weight_decay": "weight_decay",
-        "max_grad_norm": "max_grad_norm",
-        "latent_steps": "latent_steps",
-        "recurse": "recurse",
-        "log_every": "log_every",
-        "max_train_samples": "max_train_samples",
-        "max_steps_per_epoch": "max_steps_per_epoch",
-        "max_eval_samples": "max_eval_samples",
-        "eval_batches": "eval_batches",
-        "seed": "seed",
-        "num_workers": "num_workers",
-        "device": "device",
-    }
-
-    for arg_name, override_key in data_arg_map.items():
-        value = getattr(args, arg_name, None)
-        if value is not None:
-            overrides[override_key] = value
-
-    for arg_name, override_key in model_arg_map.items():
-        value = getattr(args, arg_name, None)
-        if value is not None:
-            overrides[override_key] = value
-
-    for arg_name, override_key in training_arg_map.items():
-        value = getattr(args, arg_name, None)
-        if value is not None:
-            overrides[override_key] = value
-
-    if args.streaming is not None:
-        overrides["streaming"] = args.streaming
-
-    config = apply_overrides(base_config, overrides)
-    return config
 
 
 def main(argv: Sequence[str] | None = None) -> None:
