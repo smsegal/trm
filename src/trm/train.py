@@ -13,6 +13,7 @@ def parse_args(argv: Sequence[str] | None = None) -> TrainingConfig:
         "--config",
         type=str,
         choices=sorted(CONFIG_PRESETS),
+        default="macbook",
         help="Choose a preset configuration (default, macbook, gpu).",
     )
     parser.add_argument("--dataset-name", type=str)
@@ -43,8 +44,6 @@ def parse_args(argv: Sequence[str] | None = None) -> TrainingConfig:
 
     if args.config is not None:
         base_config = CONFIG_PRESETS[args.config]()
-    else:
-        base_config = TrainingConfig()
 
     overrides: dict[str, object] = {}
 

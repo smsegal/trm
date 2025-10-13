@@ -39,7 +39,11 @@ def prepare_ds(
 ):
     dataset = load_dataset(name, split=split, streaming=stream)
     assert isinstance(dataset, Dataset)
-    dataset = dataset.rename_columns(columns).shuffle(seed)
+    
+    # Keep only columns that are in the mapping
+    cols_to_remove = [col for col in dataset.column_names if col not in columns]
+    dataset = dataset.remove_columns(cols_to_remove).rename_columns(columns).shuffle(seed)
+    
     return dataset
 
 
