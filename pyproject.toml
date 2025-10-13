@@ -19,6 +19,9 @@ dependencies = [
     "torch>=2.8.0",
 ]
 
+[project.scripts]
+trm-train = "trm.train:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0.0",

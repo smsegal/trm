@@ -21,6 +21,7 @@
 - Ruff enforces line length ≤ 120, explicit imports, and allows `torch.nn.functional as F`; keep modules importable and lightweight.
 - Use `snake_case` for functions, variables, and tests; `PascalCase` for classes; UPPER_SNAKE for constants.
 - Include type hints throughout; prefer `jaxtyping` annotations when expressing tensor shapes.
+- Avoid `from __future__ import annotations`; jaxtyping inspects runtime annotations directly.
 - Expose new public APIs via `src/trm/__init__.py` and document non-obvious tensor semantics inline.
 
 ## Testing Guidelines

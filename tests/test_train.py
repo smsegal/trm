@@ -97,6 +97,15 @@ def test_encode_example_returns_dict() -> None:
     assert all(t == BOARD_VOCAB.index("1") for t in encoded["solution"])
 
 
+def test_encode_example_accepts_question_answer_fields() -> None:
+    puzzle = make_board(".")
+    solution = make_board("1")
+    example = {"question": puzzle, "answer": solution}
+    encoded = encode_example(example)
+    assert len(encoded["puzzle"]) == SUDOKU_SEQ_LEN
+    assert len(encoded["solution"]) == SUDOKU_SEQ_LEN
+
+
 class DummyStreamingDataset:
     def __init__(self, rows: list[dict[str, str | list[int]]]) -> None:
         self._rows = rows
@@ -228,8 +237,9 @@ def test_training_step_runs_backward() -> None:
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate)
     puzzles = torch.randint(0, len(BOARD_VOCAB), (2, SUDOKU_SEQ_LEN))
     solutions = torch.randint(0, len(BOARD_VOCAB), (2, SUDOKU_SEQ_LEN))
-    loss = training_step(model, optimizer, puzzles, solutions, config=config)
+    loss, halting_logits = training_step(model, optimizer, puzzles, solutions, config=config)
     assert loss >= 0.0
+    assert isinstance(halting_logits, torch.Tensor)
 
 
 def test_evaluate_returns_metrics() -> None:
@@ -367,3 +377,14 @@ def test_parse_args_and_main(monkeypatch: pytest.MonkeyPatch) -> None:
 
     main(["--epochs", "3"])
     assert captured["config"].epochs == 3
+
+
+def test_parse_args_supports_presets() -> None:
+    config = parse_args(["--config", "macbook"])
+    assert config.batch_size == 16
+    assert config.hidden_dim == 128
+    assert config.device == "auto"
+
+    config = parse_args(["--config", "gpu", "--batch-size", "64"])
+    assert config.device == "cuda"
+    assert config.batch_size == 64

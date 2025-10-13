@@ -1,20 +1,49 @@
-from __future__ import annotations
-
 import argparse
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import fields, replace
+from typing import cast
 
 import torch
 import torch.nn.functional as F
-from datasets import load_dataset
+from datasets import Dataset, DatasetDict, IterableDataset, IterableDatasetDict, load_dataset
 from torch import Tensor
 from torch.utils.data import DataLoader
 
+from trm.config import CONFIG_PRESETS, TrainingConfig, gpu_workstation_config, macbook_quickstart_config
 from trm.model import TRM
 
 BOARD_VOCAB = ".123456789"
 TOKEN_LOOKUP = {token: index for index, token in enumerate(BOARD_VOCAB)}
 SUDOKU_SEQ_LEN = 81
+PUZZLE_COLUMN_CANDIDATES = ("puzzle", "question", "input", "board")
+SOLUTION_COLUMN_CANDIDATES = ("solution", "answer", "target", "output")
+
+
+def _resolve_split(
+    dataset: Dataset | DatasetDict | IterableDataset | IterableDatasetDict,
+    split: str,
+) -> Dataset | IterableDataset:
+    if isinstance(dataset, (DatasetDict, IterableDatasetDict)):
+        return cast(Dataset | IterableDataset, dataset[split])
+    return cast(Dataset | IterableDataset, dataset)
+
+
+def _determine_remove_columns(dataset: Dataset | IterableDataset) -> list[str] | None:
+    column_names = getattr(dataset, "column_names", None)
+    if column_names is None:
+        return None
+    return [column for column in column_names if column not in ("puzzle", "solution")]
+
+
+def _extract_board(example: dict, *, candidates: tuple[str, ...], field_name: str) -> str:
+    for key in candidates:
+        if key in example:
+            value = example[key]
+            if isinstance(value, str):
+                return value
+            raise TypeError(f"{field_name} field {key!r} must be a string, received {type(value).__name__}.")
+    available = ", ".join(sorted(example.keys()))
+    raise KeyError(f"Could not find {field_name} field in example. Available keys: {available}.")
 
 
 def encode_board(board: str) -> list[int]:
@@ -31,9 +60,11 @@ def encode_board(board: str) -> list[int]:
 
 def encode_example(example: dict) -> dict:
     """Encode a single example's puzzle and solution fields."""
+    puzzle_text = _extract_board(example, candidates=PUZZLE_COLUMN_CANDIDATES, field_name="puzzle")
+    solution_text = _extract_board(example, candidates=SOLUTION_COLUMN_CANDIDATES, field_name="solution")
     return {
-        "puzzle": encode_board(example["puzzle"]),
-        "solution": encode_board(example["solution"]),
+        "puzzle": encode_board(puzzle_text),
+        "solution": encode_board(solution_text),
     }
 
 
@@ -42,33 +73,6 @@ def sudoku_collate_fn(batch: list[dict]) -> tuple[Tensor, Tensor]:
     puzzles = torch.tensor([ex["puzzle"] for ex in batch], dtype=torch.long)
     solutions = torch.tensor([ex["solution"] for ex in batch], dtype=torch.long)
     return puzzles, solutions
-
-
-@dataclass
-class TrainingConfig:
-    dataset_name: str = "sapientinc/sudoku-extreme"
-    split: str = "train"
-    batch_size: int = 64
-    epochs: int = 1
-    learning_rate: float = 1e-3
-    weight_decay: float = 0.01
-    max_grad_norm: float = 1.0
-    hidden_dim: int = 256
-    n_layers: int = 4
-    num_heads: int | None = None
-    dropout: float = 0.1
-    latent_steps: int = 4
-    recurse: int = 6
-    log_every: int = 50
-    max_train_samples: int | None = None
-    max_steps_per_epoch: int | None = None
-    eval_split: str | None = "test"
-    max_eval_samples: int | None = 4096
-    eval_batches: int | None = None
-    streaming: bool = False
-    seed: int = 42
-    num_workers: int = 0
-    device: str = "auto"
 
 
 def resolve_device(device_option: str) -> torch.device:
@@ -96,13 +100,21 @@ def build_model(config: TrainingConfig) -> TRM:
 
 def prepare_dataset(config: TrainingConfig):
     """Load and prepare the training dataset."""
-    dataset = load_dataset(config.dataset_name, split=config.split, streaming=config.streaming)
-    if not config.streaming:
-        if config.max_train_samples is not None:
-            dataset = dataset.select(range(config.max_train_samples))
-        dataset = dataset.shuffle(seed=config.seed)
-    dataset = dataset.map(encode_example, remove_columns=["puzzle", "solution"])
-    return dataset
+    raw_dataset = load_dataset(config.dataset_name, split=config.split, streaming=config.streaming)
+    dataset = _resolve_split(raw_dataset, config.split)
+
+    if config.streaming:
+        iterable_dataset = cast(IterableDataset, dataset)
+        return iterable_dataset.map(encode_example)
+
+    hf_dataset = cast(Dataset, dataset)
+    if config.max_train_samples is not None:
+        hf_dataset = hf_dataset.select(range(config.max_train_samples))
+    hf_dataset = hf_dataset.shuffle(seed=config.seed)
+    remove_columns = _determine_remove_columns(hf_dataset)
+    if remove_columns is None:
+        return hf_dataset.map(encode_example)
+    return hf_dataset.map(encode_example, remove_columns=remove_columns)
 
 
 def build_dataloader(dataset, *, config: TrainingConfig, is_streaming: bool) -> DataLoader[tuple[Tensor, Tensor]]:
@@ -123,7 +135,7 @@ def training_step(
     solutions: Tensor,
     *,
     config: TrainingConfig,
-) -> float:
+) -> tuple[float, Tensor | float]:
     x_hidden = model.embedding(puzzles)
     zeros = torch.zeros_like(x_hidden)
     _, _, lm_logits, halting_logits = model.deep_recursion(
@@ -192,11 +204,20 @@ def prepare_eval_dataset(config: TrainingConfig):
     """Load and prepare the evaluation dataset."""
     if config.eval_split is None:
         raise ValueError("eval_split must be set before preparing evaluation data.")
-    dataset = load_dataset(config.dataset_name, split=config.eval_split, streaming=config.streaming)
-    if not config.streaming and config.max_eval_samples is not None:
-        dataset = dataset.select(range(config.max_eval_samples))
-    dataset = dataset.map(encode_example, remove_columns=["puzzle", "solution"])
-    return dataset
+    raw_dataset = load_dataset(config.dataset_name, split=config.eval_split, streaming=config.streaming)
+    dataset = _resolve_split(raw_dataset, config.eval_split)
+
+    if config.streaming:
+        iterable_dataset = cast(IterableDataset, dataset)
+        return iterable_dataset.map(encode_example)
+
+    hf_dataset = cast(Dataset, dataset)
+    if config.max_eval_samples is not None:
+        hf_dataset = hf_dataset.select(range(config.max_eval_samples))
+    remove_columns = _determine_remove_columns(hf_dataset)
+    if remove_columns is None:
+        return hf_dataset.map(encode_example)
+    return hf_dataset.map(encode_example, remove_columns=remove_columns)
 
 
 def run_training(config: TrainingConfig) -> None:
@@ -237,7 +258,11 @@ def run_training(config: TrainingConfig) -> None:
                 avg_loss = running_loss / config.log_every
                 print(f"[Epoch {epoch + 1}] Step {steps} - mean loss {avg_loss:.4f}")
                 running_loss = 0.0
-            if halting_logits > 0 and config.max_steps_per_epoch is not None and steps >= config.max_steps_per_epoch:
+            if isinstance(halting_logits, torch.Tensor):
+                halting_metric = float(halting_logits.detach().max().item())
+            else:
+                halting_metric = float(halting_logits)
+            if halting_metric > 0 and config.max_steps_per_epoch is not None and steps >= config.max_steps_per_epoch:
                 break
         if steps and steps % config.log_every != 0:
             avg_loss = running_loss / (steps % config.log_every)
@@ -263,56 +288,53 @@ def run_training(config: TrainingConfig) -> None:
 
 def parse_args(argv: Sequence[str] | None = None) -> TrainingConfig:
     parser = argparse.ArgumentParser(description="Train TRM on the sudoku-extreme dataset.")
-    parser.add_argument("--dataset-name", type=str, default="sapientinc/sudoku-extreme")
-    parser.add_argument("--split", type=str, default="train")
-    parser.add_argument("--batch-size", type=int, default=64)
-    parser.add_argument("--epochs", type=int, default=1)
-    parser.add_argument("--learning-rate", type=float, default=1e-3)
-    parser.add_argument("--weight-decay", type=float, default=1e-2)
-    parser.add_argument("--max-grad-norm", type=float, default=1.0)
-    parser.add_argument("--hidden-dim", type=int, default=256)
-    parser.add_argument("--n-layers", type=int, default=6)
-    parser.add_argument("--num-heads", type=int, default=None)
-    parser.add_argument("--dropout", type=float, default=0.1)
-    parser.add_argument("--latent-steps", type=int, default=4)
-    parser.add_argument("--recurse", type=int, default=2)
-    parser.add_argument("--log-every", type=int, default=50)
-    parser.add_argument("--max-train-samples", type=int, default=None)
-    parser.add_argument("--max-steps-per-epoch", type=int, default=None)
-    parser.add_argument("--eval-split", type=str, default="test")
-    parser.add_argument("--max-eval-samples", type=int, default=4096)
-    parser.add_argument("--eval-batches", type=int, default=None)
-    parser.add_argument("--streaming", action="store_true")
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--num-workers", type=int, default=0)
-    parser.add_argument("--device", type=str, default="auto")
+    parser.add_argument(
+        "--config",
+        type=str,
+        choices=sorted(CONFIG_PRESETS),
+        help="Choose a preset configuration (default, macbook, gpu).",
+    )
+    parser.add_argument("--dataset-name", type=str)
+    parser.add_argument("--split", type=str)
+    parser.add_argument("--batch-size", type=int)
+    parser.add_argument("--epochs", type=int)
+    parser.add_argument("--learning-rate", type=float)
+    parser.add_argument("--weight-decay", type=float)
+    parser.add_argument("--max-grad-norm", type=float)
+    parser.add_argument("--hidden-dim", type=int)
+    parser.add_argument("--n-layers", type=int)
+    parser.add_argument("--num-heads", type=int)
+    parser.add_argument("--dropout", type=float)
+    parser.add_argument("--latent-steps", type=int)
+    parser.add_argument("--recurse", type=int)
+    parser.add_argument("--log-every", type=int)
+    parser.add_argument("--max-train-samples", type=int)
+    parser.add_argument("--max-steps-per-epoch", type=int)
+    parser.add_argument("--eval-split", type=str)
+    parser.add_argument("--max-eval-samples", type=int)
+    parser.add_argument("--eval-batches", type=int)
+    parser.add_argument("--streaming", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--seed", type=int)
+    parser.add_argument("--num-workers", type=int)
+    parser.add_argument("--device", type=str)
 
     args = parser.parse_args(argv)
-    return TrainingConfig(
-        dataset_name=args.dataset_name,
-        split=args.split,
-        batch_size=args.batch_size,
-        epochs=args.epochs,
-        learning_rate=args.learning_rate,
-        weight_decay=args.weight_decay,
-        max_grad_norm=args.max_grad_norm,
-        hidden_dim=args.hidden_dim,
-        n_layers=args.n_layers,
-        num_heads=args.num_heads,
-        dropout=args.dropout,
-        latent_steps=args.latent_steps,
-        recurse=args.recurse,
-        log_every=args.log_every,
-        max_train_samples=args.max_train_samples,
-        max_steps_per_epoch=args.max_steps_per_epoch,
-        eval_split=args.eval_split,
-        max_eval_samples=args.max_eval_samples,
-        eval_batches=args.eval_batches,
-        streaming=args.streaming,
-        seed=args.seed,
-        num_workers=args.num_workers,
-        device=args.device,
-    )
+
+    if args.config is not None:
+        base_config = CONFIG_PRESETS[args.config]()
+    else:
+        base_config = TrainingConfig()
+
+    overrides = {}
+    for field in fields(TrainingConfig):
+        value = getattr(args, field.name, None)
+        if value is not None:
+            overrides[field.name] = value
+
+    config = replace(base_config, **overrides)
+    if args.streaming is not None:
+        config = replace(config, streaming=args.streaming)
+    return config
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -324,6 +346,8 @@ __all__ = [
     "BOARD_VOCAB",
     "SUDOKU_SEQ_LEN",
     "TrainingConfig",
+    "gpu_workstation_config",
+    "macbook_quickstart_config",
     "encode_board",
     "encode_example",
     "main",
