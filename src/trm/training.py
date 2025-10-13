@@ -57,11 +57,13 @@ class CheckpointManager:
     ) -> None:
         self.directory = directory
         self.keep_last = max(0, keep_last)
+        self._history_limit = max(1, self.keep_last)
         self.metric_name = metric_name
         self.maximize = maximize
         self.recent: deque[Path] = deque()
         self.best_metric: float | None = None
         self.best_path = self.directory / "best.pt"
+        self.latest_path = self.directory / "latest.pt"
         self.directory.mkdir(parents=True, exist_ok=True)
 
     def _is_better(self, metric: float) -> bool:
@@ -86,14 +88,20 @@ class CheckpointManager:
             "metrics": metrics or {},
         }
 
-        if self.keep_last > 0:
-            checkpoint_path = self.directory / f"epoch-{epoch:04d}.pt"
-            torch.save(payload, checkpoint_path)
-            self.recent.append(checkpoint_path)
-            while len(self.recent) > self.keep_last:
-                old_path = self.recent.popleft()
-                if old_path.exists():
-                    old_path.unlink()
+        checkpoint_path = self.directory / f"epoch-{epoch:04d}.pt"
+        torch.save(payload, checkpoint_path)
+        self.recent.append(checkpoint_path)
+        while len(self.recent) > self._history_limit:
+            old_path = self.recent.popleft()
+            if old_path.exists():
+                old_path.unlink()
+
+        if self.latest_path.exists() or self.latest_path.is_symlink():
+            self.latest_path.unlink()
+        try:
+            self.latest_path.symlink_to(checkpoint_path.name)
+        except OSError:
+            torch.save(payload, self.latest_path)
 
         metric_value = None
         if metrics is not None and self.metric_name in metrics:

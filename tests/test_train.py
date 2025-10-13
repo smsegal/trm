@@ -388,6 +388,9 @@ def test_run_training_saves_checkpoints(monkeypatch: pytest.MonkeyPatch, tmp_pat
     assert len(epoch_checkpoints) == 2
     assert epoch_checkpoints[0].name.endswith("0002.pt")
     assert epoch_checkpoints[1].name.endswith("0003.pt")
+    latest = checkpoint_dir / "latest.pt"
+    assert latest.exists()
+    assert latest.is_symlink() or latest.stat().st_size > 0
     assert (checkpoint_dir / "best.pt").exists()
 
 

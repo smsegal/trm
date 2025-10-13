@@ -60,6 +60,8 @@ def macbook_quickstart_config(**overrides: Any) -> TrainingConfig:
         eval_batches=4,
         num_workers=0,
         device="auto",
+        checkpoint_dir="checkpoints/macbook",
+        keep_last_n_checkpoints=2,
     )
     if overrides:
         return replace(base, **overrides)
@@ -86,6 +88,8 @@ def gpu_workstation_config(**overrides: Any) -> TrainingConfig:
         eval_batches=16,
         num_workers=4,
         device="cuda",
+        checkpoint_dir="checkpoints/gpu",
+        keep_last_n_checkpoints=4,
     )
     if overrides:
         return replace(base, **overrides)
