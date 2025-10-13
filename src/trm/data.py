@@ -1,5 +1,6 @@
 """Data processing utilities for TRM models."""
 
+from collections.abc import Sequence
 from typing import cast
 
 import torch
@@ -7,9 +8,12 @@ from datasets import Dataset, DatasetDict, IterableDataset, IterableDatasetDict,
 
 BOARD_VOCAB = ".123456789"
 TOKEN_LOOKUP = {token: index for index, token in enumerate(BOARD_VOCAB)}
+TOKEN_REVERSE_LOOKUP = {index: token for token, index in TOKEN_LOOKUP.items()}
 SUDOKU_SEQ_LEN = 81
-PUZZLE_COLUMN_CANDIDATES = ("puzzle", "question", "input", "board")
-SOLUTION_COLUMN_CANDIDATES = ("solution", "answer", "target", "output")
+RAW_PUZZLE_COLUMN = "question"
+RAW_SOLUTION_COLUMN = "answer"
+ENCODED_PUZZLE_COLUMN = "puzzle"
+ENCODED_SOLUTION_COLUMN = "solution"
 
 
 def _resolve_split(
@@ -25,18 +29,23 @@ def _determine_remove_columns(dataset: Dataset | IterableDataset) -> list[str] |
     column_names = getattr(dataset, "column_names", None)
     if column_names is None:
         return None
-    return [column for column in column_names if column not in ("puzzle", "solution")]
+    return [column for column in column_names if column not in (ENCODED_PUZZLE_COLUMN, ENCODED_SOLUTION_COLUMN)]
 
 
-def _extract_board(example: dict, *, candidates: tuple[str, ...], field_name: str) -> str:
-    for key in candidates:
-        if key in example:
-            value = example[key]
-            if isinstance(value, str):
-                return value
-            raise TypeError(f"{field_name} field {key!r} must be a string, received {type(value).__name__}.")
-    available = ", ".join(sorted(example.keys()))
-    raise KeyError(f"Could not find {field_name} field in example. Available keys: {available}.")
+def _extract_board(example: dict, *, raw_column: str, encoded_column: str) -> str:
+    if raw_column in example:
+        value = example[raw_column]
+    elif encoded_column in example:
+        value = example[encoded_column]
+    else:
+        available = ", ".join(sorted(example.keys()))
+        raise KeyError(f"Could not find {raw_column!r} or {encoded_column!r} in example. Available keys: {available}.")
+    if not isinstance(value, str):
+        raise TypeError(
+            f"{raw_column if raw_column in example else encoded_column} must be a string, "
+            f"received {type(value).__name__}."
+        )
+    return value
 
 
 def encode_board(board: str) -> list[int]:
@@ -51,14 +60,40 @@ def encode_board(board: str) -> list[int]:
     return tokens
 
 
+def format_board(board: str) -> str:
+    """Pretty-print a flattened sudoku board as a 9x9 grid."""
+    cleaned = board.strip().replace("\n", "").replace(" ", "")
+    if len(cleaned) != SUDOKU_SEQ_LEN:
+        raise ValueError(f"Sudoku board must be length {SUDOKU_SEQ_LEN}, received {len(cleaned)}.")
+    rows = [cleaned[i : i + 9] for i in range(0, SUDOKU_SEQ_LEN, 9)]
+    return "\n".join(rows)
+
+
 def encode_example(example: dict) -> dict:
     """Encode a single example's puzzle and solution fields."""
-    puzzle_text = _extract_board(example, candidates=PUZZLE_COLUMN_CANDIDATES, field_name="puzzle")
-    solution_text = _extract_board(example, candidates=SOLUTION_COLUMN_CANDIDATES, field_name="solution")
+    puzzle_text = _extract_board(
+        example,
+        raw_column=RAW_PUZZLE_COLUMN,
+        encoded_column=ENCODED_PUZZLE_COLUMN,
+    )
+    solution_text = _extract_board(
+        example,
+        raw_column=RAW_SOLUTION_COLUMN,
+        encoded_column=ENCODED_SOLUTION_COLUMN,
+    )
     return {
-        "puzzle": encode_board(puzzle_text),
-        "solution": encode_board(solution_text),
+        ENCODED_PUZZLE_COLUMN: encode_board(puzzle_text),
+        ENCODED_SOLUTION_COLUMN: encode_board(solution_text),
     }
+
+
+def decode_board(tokens: Sequence[int]) -> str:
+    """Convert token ids back into a flattened sudoku board string."""
+    try:
+        characters = [TOKEN_REVERSE_LOOKUP[int(token)] for token in tokens]
+    except KeyError as exc:
+        raise ValueError(f"Unexpected token id {exc.args[0]!r} in sudoku encoding.") from exc
+    return "".join(characters)
 
 
 def sudoku_collate_fn(batch: list[dict]) -> tuple[torch.Tensor, torch.Tensor]:

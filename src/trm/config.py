@@ -49,7 +49,7 @@ def macbook_quickstart_config(**overrides: Any) -> TrainingConfig:
         latent_steps=4,
         recurse=2,
         log_every=10,
-        max_train_samples=8192,
+        max_train_samples=512,
         max_steps_per_epoch=1000,
         max_eval_samples=256,
         eval_batches=4,
@@ -92,4 +92,3 @@ CONFIG_PRESETS: dict[str, Callable[[], TrainingConfig]] = {
     "macbook": macbook_quickstart_config,
     "gpu": gpu_workstation_config,
 }
-

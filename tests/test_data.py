@@ -8,8 +8,10 @@ from trm.data import (
     BOARD_VOCAB,
     SUDOKU_SEQ_LEN,
     build_dataloader,
+    decode_board,
     encode_board,
     encode_example,
+    format_board,
     prepare_dataset,
     prepare_eval_dataset,
     sudoku_collate_fn,
@@ -25,8 +27,10 @@ def make_board(pattern: str) -> str:
 def make_sudoku_rows(count: int) -> list[dict[str, str]]:
     return [
         {
-            "puzzle": make_board("." * 9),
-            "solution": make_board("123456789"),
+            "source": "synthetic",
+            "question": make_board("." * 9),
+            "answer": make_board("123456789"),
+            "rating": "hard",
         }
         for _ in range(count)
     ]
@@ -159,22 +163,22 @@ def test_encode_board_invalid_character() -> None:
 
 def test_encode_example() -> None:
     example = {
-        "puzzle": make_board(".123456789"),
-        "solution": make_board("123456789."),
-        "extra": "ignore_me",
+        "source": "synthetic",
+        "question": make_board(".123456789"),
+        "answer": make_board("123456789."),
+        "rating": "extreme",
     }
     encoded = encode_example(example)
     assert "puzzle" in encoded
     assert "solution" in encoded
-    assert "extra" not in encoded
     assert len(encoded["puzzle"]) == SUDOKU_SEQ_LEN
     assert len(encoded["solution"]) == SUDOKU_SEQ_LEN
 
 
-def test_encode_example_alternative_columns() -> None:
+def test_encode_example_accepts_legacy_columns() -> None:
     example = {
-        "question": make_board(".123456789"),
-        "answer": make_board("123456789."),
+        "puzzle": make_board(".123456789"),
+        "solution": make_board("123456789."),
     }
     encoded = encode_example(example)
     assert "puzzle" in encoded
@@ -184,15 +188,46 @@ def test_encode_example_alternative_columns() -> None:
 
 
 def test_encode_example_missing_puzzle() -> None:
-    example = {"solution": make_board("123456789.")}
-    with pytest.raises(KeyError, match="Could not find puzzle field"):
+    example = {"answer": make_board("123456789.")}
+    with pytest.raises(KeyError, match="Could not find 'question' or 'puzzle'"):
         encode_example(example)
 
 
 def test_encode_example_missing_solution() -> None:
-    example = {"puzzle": make_board(".123456789")}
-    with pytest.raises(KeyError, match="Could not find solution field"):
+    example = {"question": make_board(".123456789")}
+    with pytest.raises(KeyError, match="Could not find 'answer' or 'solution'"):
         encode_example(example)
+
+
+def test_encode_example_requires_strings() -> None:
+    example = {"question": 123, "answer": make_board("123456789.")}
+    with pytest.raises(TypeError, match="question must be a string"):
+        encode_example(example)
+
+
+def test_decode_board_roundtrip() -> None:
+    board = "123456789" * 9
+    tokens = encode_board(board)
+    assert decode_board(tokens) == board
+
+
+def test_decode_board_rejects_invalid_token() -> None:
+    with pytest.raises(ValueError, match="Unexpected token id"):
+        decode_board([99] * SUDOKU_SEQ_LEN)
+
+
+def test_format_board() -> None:
+    board = "123456789" * 9
+    formatted = format_board(board)
+    rows = formatted.splitlines()
+    assert len(rows) == 9
+    assert rows[0] == "123456789"
+    assert rows[-1] == "123456789"
+
+
+def test_format_board_requires_full_length() -> None:
+    with pytest.raises(ValueError, match="Sudoku board must be length 81"):
+        format_board("123")
 
 
 def test_sudoku_collate_fn() -> None:

@@ -21,6 +21,8 @@ dependencies = [
 
 [project.scripts]
 trm-train = "trm.train:main"
+trm-inspect = "trm.inspection:main"
+trm-viewer = "trm.viewer:main"
 
 [project.optional-dependencies]
 dev = [
