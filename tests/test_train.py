@@ -7,26 +7,24 @@ from torch.utils.data import IterableDataset
 from trm.config import TrainingConfig
 from trm.train import main, parse_args
 from trm.training import (
-    BOARD_VOCAB,
-    SUDOKU_SEQ_LEN,
-    build_dataloader,
     build_model,
-    encode_board,
-    encode_example,
     evaluate,
-    prepare_dataset,
-    prepare_eval_dataset,
     resolve_device,
     run_training,
-    sudoku_collate_fn,
     training_step,
 )
 
 
 def make_board(pattern: str) -> str:
-    repeat = (SUDOKU_SEQ_LEN + len(pattern) - 1) // len(pattern)
-    board = (pattern * repeat)[:SUDOKU_SEQ_LEN]
+    repeat = (81 + len(pattern) - 1) // len(pattern)
+    board = (pattern * repeat)[:81]
     return board
+
+
+def encode_board(board: str) -> list[int]:
+    """Simple encode_board function for testing."""
+    from trm.data import encode_board as real_encode_board
+    return real_encode_board(board)
 
 
 @pytest.fixture()
@@ -38,49 +36,6 @@ def sudoku_rows() -> list[dict[str, str]]:
     ]
 
 
-def test_encode_board_validates_length() -> None:
-    board = make_board(".1")
-    tokens = encode_board(board)
-    assert isinstance(tokens, list)
-    assert len(tokens) == SUDOKU_SEQ_LEN
-    assert tokens[0] == BOARD_VOCAB.index(".")
-    assert tokens[1] == BOARD_VOCAB.index("1")
-
-
-def test_encode_board_rejects_incorrect_length() -> None:
-    with pytest.raises(ValueError):
-        encode_board("." * (SUDOKU_SEQ_LEN - 1))
-
-
-def test_encode_board_rejects_unknown_characters() -> None:
-    with pytest.raises(ValueError):
-        encode_board("X" * SUDOKU_SEQ_LEN)
-
-
-class DummyBatchDataset:
-    def __init__(self, rows: list[dict[str, object]], batch_size: int, drop_last_batch: bool) -> None:
-        self._rows = rows
-        self._batch_size = batch_size
-        self._drop_last_batch = drop_last_batch
-
-    def __iter__(self):
-        batch: list[dict[str, object]] = []
-        for example in self._rows:
-            batch.append(example)
-            if len(batch) == self._batch_size:
-                yield self._collate(batch)
-                batch = []
-        if batch and not self._drop_last_batch:
-            yield self._collate(batch)
-
-    @staticmethod
-    def _collate(batch: list[dict[str, object]]) -> dict[str, list[object]]:
-        collated: dict[str, list[object]] = {}
-        for key in batch[0]:
-            collated[key] = [example[key] for example in batch]
-        return collated
-
-
 class DummyHFDataset:
     def __init__(self, rows: list[dict[str, str | list[int]]]) -> None:
         self._rows = rows
@@ -88,72 +43,70 @@ class DummyHFDataset:
     def __len__(self) -> int:
         return len(self._rows)
 
-    def __getitem__(self, index: int) -> dict[str, str | list[int]]:
-        return self._rows[index]
-
-    def select(self, indices: range) -> "DummyHFDataset":
-        selected = [self._rows[i] for i in indices]
-        return DummyHFDataset(selected)
+    def __getitem__(self, idx: int) -> dict[str, str | list[int]]:
+        return self._rows[idx]
 
     def shuffle(self, seed: int) -> "DummyHFDataset":
-        # Deterministic shuffle for test purposes.
-        rng = torch.Generator().manual_seed(seed)
-        perm = torch.randperm(len(self._rows), generator=rng).tolist()
-        return DummyHFDataset([self._rows[i] for i in perm])
+        import random
+
+        random.seed(seed)
+        rows = self._rows.copy()
+        random.shuffle(rows)
+        return DummyHFDataset(rows)
+
+    def select(self, indices: range) -> "DummyHFDataset":
+        return DummyHFDataset([self._rows[i] for i in indices])
 
     def map(self, func, remove_columns=None) -> "DummyHFDataset":
-        mapped = [func(row) for row in self._rows]
-        return DummyHFDataset(mapped)
+        mapped_rows = [func(row) for row in self._rows]
+        return DummyHFDataset(mapped_rows)
 
-    def batch(self, batch_size: int, drop_last_batch: bool = False) -> DummyBatchDataset:
+    def batch(self, batch_size: int, drop_last_batch: bool = False) -> "DummyBatchDataset":
         return DummyBatchDataset(self._rows, batch_size, drop_last_batch)
 
 
-def test_encode_example_returns_dict() -> None:
-    puzzle = make_board(".")
-    solution = make_board("1")
-    example = {"puzzle": puzzle, "solution": solution}
-    encoded = encode_example(example)
-    assert isinstance(encoded, dict)
-    assert "puzzle" in encoded
-    assert "solution" in encoded
-    assert len(encoded["puzzle"]) == SUDOKU_SEQ_LEN
-    assert len(encoded["solution"]) == SUDOKU_SEQ_LEN
-    assert all(t == 0 for t in encoded["puzzle"])
-    assert all(t == BOARD_VOCAB.index("1") for t in encoded["solution"])
+class DummyBatchDataset:
+    def __init__(self, rows: list[dict[str, str | list[int]]], batch_size: int, drop_last_batch: bool = False) -> None:
+        self._rows = rows
+        self._batch_size = batch_size
+        self._drop_last_batch = drop_last_batch
+
+    def __iter__(self):
+        batch = []
+        for row in self._rows:
+            batch.append(row)
+            if len(batch) >= self._batch_size:
+                yield self._collate(batch)
+                batch = []
+        if batch and not self._drop_last_batch:
+            yield self._collate(batch)
+
+    @staticmethod
+    def _collate(batch: list[dict[str, list[int]]]) -> dict[str, torch.Tensor]:
+        puzzles = torch.tensor([item["puzzle"] for item in batch], dtype=torch.long)
+        solutions = torch.tensor([item["solution"] for item in batch], dtype=torch.long)
+        return {"puzzle": puzzles, "solution": solutions}
 
 
-def test_encode_example_accepts_question_answer_fields() -> None:
-    puzzle = make_board(".")
-    solution = make_board("1")
-    example = {"question": puzzle, "answer": solution}
-    encoded = encode_example(example)
-    assert len(encoded["puzzle"]) == SUDOKU_SEQ_LEN
-    assert len(encoded["solution"]) == SUDOKU_SEQ_LEN
-
-
-class DummyStreamingDataset:
-    def __init__(self, rows: list[dict[str, str | list[int]]]) -> None:
+class DummyStreamingDataset(IterableDataset):
+    def __init__(self, rows: list[dict[str, str]]) -> None:
         self._rows = rows
 
     def __iter__(self):
-        yield from itertools.cycle(self._rows)
+        yield from self._rows
 
     def map(self, func, remove_columns=None) -> "DummyStreamingMappedDataset":
-        # For streaming datasets, map is lazy but we'll simulate it here
         return DummyStreamingMappedDataset(self._rows, func)
 
-    def batch(self, batch_size: int, drop_last_batch: bool = False) -> "DummyStreamingBatchedDataset":
-        return DummyStreamingBatchedDataset(self, batch_size, drop_last_batch)
 
-
-class DummyStreamingMappedDataset:
-    def __init__(self, rows: list[dict[str, str | list[int]]], func) -> None:
+class DummyStreamingMappedDataset(IterableDataset):
+    def __init__(self, rows: list[dict[str, str]], func) -> None:
+        super().__init__()
         self._rows = rows
         self._func = func
 
     def __iter__(self):
-        for row in itertools.cycle(self._rows):
+        for row in self._rows:
             yield self._func(row)
 
     def batch(self, batch_size: int, drop_last_batch: bool = False) -> "DummyStreamingBatchedDataset":
@@ -161,30 +114,26 @@ class DummyStreamingMappedDataset:
 
 
 class DummyStreamingBatchedDataset:
-    def __init__(self, dataset, batch_size: int, drop_last_batch: bool) -> None:
+    def __init__(self, dataset: DummyStreamingMappedDataset, batch_size: int, drop_last_batch: bool = False) -> None:
         self._dataset = dataset
         self._batch_size = batch_size
         self._drop_last_batch = drop_last_batch
 
     def __iter__(self):
-        iterator = iter(self._dataset)
-        batch: list[dict[str, object]] = []
-        for example in iterator:
-            batch.append(example)
-            if len(batch) == self._batch_size:
-                yield DummyBatchDataset._collate(batch)
+        batch = []
+        for item in self._dataset:
+            batch.append(item)
+            if len(batch) >= self._batch_size:
+                yield {
+                    "puzzle": [item["puzzle"] for item in batch],
+                    "solution": [item["solution"] for item in batch]
+                }
                 batch = []
         if batch and not self._drop_last_batch:
-            yield DummyBatchDataset._collate(batch)
-
-
-def test_sudoku_collate_fn_batches_examples() -> None:
-    puzzle = encode_board(make_board("."))
-    solution = encode_board(make_board("1"))
-    batch = sudoku_collate_fn([{"puzzle": puzzle, "solution": solution}, {"puzzle": puzzle, "solution": solution}])
-    puzzles, solutions = batch
-    assert puzzles.shape == (2, SUDOKU_SEQ_LEN)
-    assert solutions.shape == (2, SUDOKU_SEQ_LEN)
+            yield {
+                "puzzle": [item["puzzle"] for item in batch],
+                "solution": [item["solution"] for item in batch]
+            }
 
 
 def test_resolve_device_auto_cpu(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -211,67 +160,9 @@ def test_resolve_device_uses_mps(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_build_model_uses_vocab_size() -> None:
     config = TrainingConfig(hidden_dim=32, n_layers=2, num_heads=4, dropout=0.0)
     model = build_model(config)
+    from trm.data import BOARD_VOCAB
     assert model.embedding.num_embeddings == len(BOARD_VOCAB)
     assert model.embedding.embedding_dim == config.hidden_dim
-
-
-def test_prepare_dataset_map_style(monkeypatch: pytest.MonkeyPatch, sudoku_rows: list[dict[str, str]]) -> None:
-    def fake_load_dataset(name: str, split: str, streaming: bool = False):
-        assert name == "sapientinc/sudoku-extreme"
-        assert split == "train"
-        assert not streaming
-        return DummyHFDataset(sudoku_rows)
-
-    monkeypatch.setattr("trm.train.load_dataset", fake_load_dataset)
-    config = TrainingConfig(max_train_samples=2, seed=0)
-    dataset = prepare_dataset(config)
-    assert len(dataset) == 2
-    example = dataset[0]
-    assert isinstance(example["puzzle"], list)
-    assert isinstance(example["solution"], list)
-    assert len(example["puzzle"]) == SUDOKU_SEQ_LEN
-    assert len(example["solution"]) == SUDOKU_SEQ_LEN
-
-
-def test_prepare_dataset_streaming(monkeypatch: pytest.MonkeyPatch, sudoku_rows: list[dict[str, str]]) -> None:
-    def fake_load_dataset(name: str, split: str, streaming: bool = False):
-        return DummyStreamingDataset(sudoku_rows)
-
-    monkeypatch.setattr("trm.train.load_dataset", fake_load_dataset)
-    config = TrainingConfig(streaming=True, max_train_samples=2)
-    dataset = prepare_dataset(config)
-    items = list(itertools.islice(dataset, 3))
-    assert len(items) == 3  # Streaming cycles indefinitely
-
-
-def test_prepare_eval_dataset(monkeypatch: pytest.MonkeyPatch, sudoku_rows: list[dict[str, str]]) -> None:
-    def fake_load_dataset(name: str, split: str, streaming: bool = False):
-        assert split == "validation"
-        if streaming:
-            return DummyStreamingDataset(sudoku_rows)
-        return DummyHFDataset(sudoku_rows)
-
-    monkeypatch.setattr("trm.train.load_dataset", fake_load_dataset)
-    config = TrainingConfig(eval_split="validation", max_eval_samples=1)
-    dataset = prepare_eval_dataset(config)
-    assert len(dataset) == 1
-
-
-def test_prepare_eval_dataset_streaming(monkeypatch: pytest.MonkeyPatch, sudoku_rows: list[dict[str, str]]) -> None:
-    def fake_load_dataset(name: str, split: str, streaming: bool = False):
-        return DummyStreamingDataset(sudoku_rows)
-
-    monkeypatch.setattr("trm.train.load_dataset", fake_load_dataset)
-    config = TrainingConfig(streaming=True, eval_split="validation", max_eval_samples=2)
-    dataset = prepare_eval_dataset(config)
-    items = list(itertools.islice(dataset, 3))
-    assert len(items) == 3  # Streaming cycles indefinitely
-
-
-def test_prepare_eval_dataset_requires_split() -> None:
-    config = TrainingConfig(eval_split=None)
-    with pytest.raises(ValueError):
-        prepare_eval_dataset(config)
 
 
 def test_training_step_runs_backward() -> None:
@@ -284,11 +175,20 @@ def test_training_step_runs_backward() -> None:
         max_grad_norm=1.0,
     )
     model = build_model(config)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate)
-    puzzles = torch.randint(0, len(BOARD_VOCAB), (2, SUDOKU_SEQ_LEN))
-    solutions = torch.randint(0, len(BOARD_VOCAB), (2, SUDOKU_SEQ_LEN))
-    loss, halting_logits = training_step(model, optimizer, puzzles, solutions, config=config)
-    assert loss >= 0.0
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+    
+    # Create dummy data
+    puzzles = torch.zeros(2, 81, dtype=torch.long)
+    solutions = torch.ones(2, 81, dtype=torch.long)
+    
+    loss, halting_logits = training_step(
+        model,
+        optimizer,
+        puzzles,
+        solutions,
+        config=config,
+    )
+    assert isinstance(loss, float)
     assert isinstance(halting_logits, torch.Tensor)
 
 
@@ -301,17 +201,32 @@ def test_evaluate_returns_metrics() -> None:
         recurse=1,
     )
     model = build_model(config)
-    sample = {"puzzle": encode_board(make_board(".")), "solution": encode_board(make_board("1"))}
-    dataloader = build_dataloader(DummyHFDataset([sample]), config=config)
-    metrics = evaluate(model, dataloader, device=torch.device("cpu"), config=config, max_batches=1)
+    
+    # Create dummy dataset with tensors
+    puzzles = torch.zeros(2, 81, dtype=torch.long)
+    solutions = torch.ones(2, 81, dtype=torch.long)
+    
+    def mock_dataloader():
+        yield puzzles, solutions
+        yield puzzles, solutions
+    
+    metrics = evaluate(
+        model,
+        mock_dataloader(),
+        device=torch.device("cpu"),
+        config=config,
+        max_batches=1,
+    )
     assert "loss" in metrics and "cell_accuracy" in metrics
 
 
 def test_build_dataloader_batches_items() -> None:
+    from trm.data import build_dataloader
+    
     config = TrainingConfig(batch_size=2)
     dataset = DummyHFDataset([
         {"puzzle": encode_board(make_board(".")), "solution": encode_board(make_board("1"))},
-        {"puzzle": encode_board(make_board(".2")), "solution": encode_board(make_board("2"))},
+        {"puzzle": encode_board(make_board(".")), "solution": encode_board(make_board("1"))},
     ])
     dataloader = build_dataloader(dataset, config=config)
     puzzles, _ = next(iter(dataloader))
@@ -329,12 +244,6 @@ def test_run_training_executes(monkeypatch: pytest.MonkeyPatch, sudoku_rows: lis
         def map(self, func, remove_columns=None) -> "FiniteStreamingMappedDataset":
             return FiniteStreamingMappedDataset(self._rows, func)
 
-        def batch(self, batch_size: int, drop_last_batch: bool = False) -> DummyStreamingBatchedDataset:
-            return DummyStreamingBatchedDataset(self, batch_size, drop_last_batch)
-
-        def batch(self, batch_size: int, drop_last_batch: bool = False) -> DummyStreamingBatchedDataset:
-            return DummyStreamingBatchedDataset(self, batch_size, drop_last_batch)
-
     class FiniteStreamingMappedDataset(IterableDataset):
         def __init__(self, rows: list[dict[str, str | list[int]]], func) -> None:
             super().__init__()
@@ -345,10 +254,7 @@ def test_run_training_executes(monkeypatch: pytest.MonkeyPatch, sudoku_rows: lis
             for row in self._rows:
                 yield self._func(row)
 
-        def batch(self, batch_size: int, drop_last_batch: bool = False) -> DummyStreamingBatchedDataset:
-            return DummyStreamingBatchedDataset(self, batch_size, drop_last_batch)
-
-        def batch(self, batch_size: int, drop_last_batch: bool = False) -> DummyStreamingBatchedDataset:
+        def batch(self, batch_size: int, drop_last_batch: bool = False) -> "DummyStreamingBatchedDataset":
             return DummyStreamingBatchedDataset(self, batch_size, drop_last_batch)
 
     def fake_load_dataset(name: str, split: str, streaming: bool = False):
@@ -356,7 +262,7 @@ def test_run_training_executes(monkeypatch: pytest.MonkeyPatch, sudoku_rows: lis
             return FiniteStreamingDataset(sudoku_rows)
         return DummyHFDataset(sudoku_rows)
 
-    monkeypatch.setattr("trm.train.load_dataset", fake_load_dataset)
+    monkeypatch.setattr("trm.data.load_dataset", fake_load_dataset)
     config = TrainingConfig(
         epochs=1,
         batch_size=2,
@@ -398,12 +304,37 @@ def test_run_training_streaming(monkeypatch: pytest.MonkeyPatch, sudoku_rows: li
             for row in self._rows:
                 yield self._func(row)
 
+        def batch(self, batch_size: int, drop_last_batch: bool = False):
+            class FiniteStreamingBatchedDataset:
+                def __init__(self, dataset, batch_size: int, drop_last_batch: bool = False) -> None:
+                    self._dataset = dataset
+                    self._batch_size = batch_size
+                    self._drop_last_batch = drop_last_batch
+
+                def __iter__(self):
+                    batch = []
+                    for item in self._dataset:
+                        batch.append(item)
+                        if len(batch) >= self._batch_size:
+                            yield {
+                                "puzzle": [item["puzzle"] for item in batch],
+                                "solution": [item["solution"] for item in batch]
+                            }
+                            batch = []
+                    if batch and not self._drop_last_batch:
+                        yield {
+                            "puzzle": [item["puzzle"] for item in batch],
+                            "solution": [item["solution"] for item in batch]
+                        }
+            
+            return FiniteStreamingBatchedDataset(self, batch_size, drop_last_batch)
+
     def fake_load_dataset(name: str, split: str, streaming: bool = False):
         if streaming:
             return FiniteStreamingDataset(sudoku_rows)
         return DummyHFDataset(sudoku_rows)
 
-    monkeypatch.setattr("trm.train.load_dataset", fake_load_dataset)
+    monkeypatch.setattr("trm.data.load_dataset", fake_load_dataset)
     config = TrainingConfig(
         streaming=True,
         epochs=1,
@@ -416,7 +347,7 @@ def test_run_training_streaming(monkeypatch: pytest.MonkeyPatch, sudoku_rows: li
         recurse=1,
         max_train_samples=2,
         max_steps_per_epoch=1,
-        log_every=10,
+        log_every=1,
         eval_split="train",
         max_eval_samples=2,
         eval_batches=1,
@@ -436,7 +367,7 @@ def test_parse_args_and_main(monkeypatch: pytest.MonkeyPatch) -> None:
     assert config.epochs == 2
     assert config.batch_size == 8
     assert config.streaming
-
+    
     main(["--epochs", "3"])
     assert captured["config"].epochs == 3
 

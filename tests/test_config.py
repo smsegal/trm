@@ -1,8 +1,6 @@
 from trm import gpu_workstation_config as package_gpu_config
 from trm import macbook_quickstart_config as package_mac_config
 from trm.config import gpu_workstation_config, macbook_quickstart_config
-from trm.train import gpu_workstation_config as train_gpu_config
-from trm.train import macbook_quickstart_config as train_mac_config
 
 
 def test_macbook_quickstart_config_defaults() -> None:
@@ -31,7 +29,5 @@ def test_gpu_workstation_config_defaults() -> None:
 
 
 def test_configs_reexported() -> None:
-    assert train_mac_config is macbook_quickstart_config
     assert package_mac_config is macbook_quickstart_config
-    assert train_gpu_config is gpu_workstation_config
     assert package_gpu_config is gpu_workstation_config
