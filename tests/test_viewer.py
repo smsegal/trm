@@ -65,6 +65,7 @@ def test_predict_solution_roundtrip():
     model = DummyModel(tokens)
     config = TrainingConfig(latent_steps=1, recurse=1)
     device = torch.device("cpu")
-    predicted, accuracy = _predict_solution(model, sample, device=device, config=config)
+    predicted, accuracy, mismatches = _predict_solution(model, sample, device=device, config=config)
     assert predicted == board
     assert accuracy == 1.0
+    assert mismatches == set()

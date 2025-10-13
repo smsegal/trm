@@ -3,14 +3,18 @@
 import argparse
 from dataclasses import fields, replace
 from pathlib import Path
-from typing import Sequence
+from typing import Sequence, Set
 
 import torch
+from rich.console import Console
+from rich.panel import Panel
 
 from .config import CONFIG_PRESETS, TrainingConfig
-from .data import decode_board, format_board
+from .data import decode_board
 from .inspection import SudokuSample, pull_sudoku_samples
 from .training import build_model, resolve_device
+
+console = Console()
 
 
 def _build_config(args: argparse.Namespace) -> TrainingConfig:
@@ -53,7 +57,7 @@ def _predict_solution(
     *,
     device: torch.device,
     config: TrainingConfig,
-) -> tuple[str, float]:
+) -> tuple[str, float, Set[int]]:
     model.eval()
     with torch.no_grad():
         puzzle = torch.tensor(sample.encoded_puzzle, dtype=torch.long, device=device).unsqueeze(0)
@@ -70,28 +74,92 @@ def _predict_solution(
     predicted_board = decode_board(preds)
     matches = sum(1 for truth, pred in zip(sample.answer, predicted_board) if truth == pred)
     accuracy = matches / len(preds)
-    return predicted_board, accuracy
+    target_tokens = sample.encoded_solution
+    mismatch_indices = {idx for idx, (target, pred) in enumerate(zip(target_tokens, preds)) if target != pred}
+    return predicted_board, accuracy, mismatch_indices
+
+
+def _stylize_cell(char: str, *, style: str | None) -> str:
+    if style is None:
+        return char
+    return f"[{style}]{char}[/]"
+
+
+def _format_sudoku_ascii(
+    board: str,
+    *,
+    highlight: Set[int] | None = None,
+    puzzle: bool = False,
+) -> str:
+    highlight = highlight or set()
+    rows = [board[i : i + 9] for i in range(0, len(board), 9)]
+
+    top = "┌───────┬───────┬───────┐"
+    inner = "├───────┼───────┼───────┤"
+    bold_inner = "├═══════╪═══════╪═══════┤"
+    bottom = "└───────┴───────┴───────┘"
+
+    lines: list[str] = [top]
+    for row_idx, row in enumerate(rows):
+        cells: list[str] = []
+        for col_idx, char in enumerate(row):
+            flat_idx = row_idx * 9 + col_idx
+            base = "·" if char == "." else char
+            style: str | None = None
+            if char == ".":
+                style = "dim"
+            elif puzzle:
+                style = "bold"
+            if flat_idx in highlight:
+                style = "bold red"
+            cells.append(_stylize_cell(base, style=style))
+        left = " ".join(cells[:3])
+        middle = " ".join(cells[3:6])
+        right = " ".join(cells[6:])
+        lines.append(f"│ {left} │ {middle} │ {right} │")
+
+        if row_idx == len(rows) - 1:
+            continue
+        if (row_idx + 1) % 3 == 0:
+            lines.append(bold_inner)
+        else:
+            lines.append(inner)
+    lines.append(bottom)
+    return "\n".join(lines)
+
+
+def _render_board(
+    board: str,
+    *,
+    title: str,
+    highlight: Set[int] | None = None,
+    puzzle: bool = False,
+    border_style: str = "blue",
+) -> None:
+    ascii_board = _format_sudoku_ascii(board, highlight=highlight, puzzle=puzzle)
+    panel = Panel.fit(
+        ascii_board,
+        title=title,
+        border_style=border_style,
+        padding=(0, 2),
+    )
+    console.print(panel)
 
 
 def _print_sample(sample: SudokuSample) -> None:
-    print(f"Source : {sample.source}")
-    print(f"Rating : {sample.rating}")
-    print("Puzzle :")
-    print(format_board(sample.question))
+    console.print(f"[bold]Source:[/] {sample.source}")
+    console.print(f"[bold]Rating:[/] {sample.rating}")
+    _render_board(sample.question, title="Puzzle", puzzle=True, border_style="cyan")
 
 
 def _print_solution(sample: SudokuSample) -> None:
-    print("Solution:")
-    print(format_board(sample.answer))
+    _render_board(sample.answer, title="Solution", border_style="green")
 
 
-def _print_prediction(predicted: str, sample: SudokuSample, accuracy: float) -> None:
-    print("Model Prediction:")
-    print(format_board(predicted))
-    print(f"Cell accuracy: {accuracy * 100:.2f}%")
-
-    print("Ground Truth:")
-    print(format_board(sample.answer))
+def _print_prediction(predicted: str, sample: SudokuSample, accuracy: float, mismatches: Set[int]) -> None:
+    _render_board(predicted, title="Model Prediction", highlight=mismatches, border_style="magenta")
+    console.print(f"[bold]Cell accuracy:[/] {accuracy * 100:.2f}%")
+    _render_board(sample.answer, title="Ground Truth", border_style="green")
 
 
 def _interactive_loop(
@@ -102,14 +170,14 @@ def _interactive_loop(
     config: TrainingConfig,
 ) -> None:
     if not samples:
-        print("No samples available to display.")
+        console.print("[red]No samples available to display.[/red]")
         return
     index = 0
-    print("Interactive viewer controls: [Enter]/n next, p previous, s show solution, m run model, q quit.")
+    console.print("[dim]Controls: [Enter]/n next, p previous, s show solution, m run model, q quit.[/dim]")
     while True:
         sample = samples[index]
-        print()
-        print(f"=== Sample {index + 1} of {len(samples)} ===")
+        console.print()
+        console.print(f"[bold]=== Sample {index + 1} of {len(samples)} ===[/bold]")
         _print_sample(sample)
 
         command = input("Command [n/p/s/m/q]: ").strip().lower()
@@ -123,13 +191,13 @@ def _interactive_loop(
             _print_solution(sample)
             continue
         if command == "m":
-            predicted, accuracy = _predict_solution(model, sample, device=device, config=config)
-            _print_prediction(predicted, sample, accuracy)
+            predicted, accuracy, mismatches = _predict_solution(model, sample, device=device, config=config)
+            _print_prediction(predicted, sample, accuracy, mismatches)
             continue
         if command == "q":
-            print("Exiting viewer.")
+            console.print("[green]Exiting viewer.[/green]")
             break
-        print("Unrecognised command. Use n, p, s, m, or q.")
+        console.print("[red]Unrecognised command. Use n, p, s, m, or q.[/red]")
 
 
 def main(argv: Sequence[str] | None = None) -> None:

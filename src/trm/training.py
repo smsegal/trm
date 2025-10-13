@@ -116,8 +116,6 @@ class CheckpointManager:
             self.best_metric = metric_float
 
 
-
-
 def training_step(
     model: TRM,
     optimizer: torch.optim.Optimizer,
@@ -221,8 +219,6 @@ def evaluate(
             print(format_board(solution_board))
             print()
     return metrics
-
-
 
 
 def run_training(config: TrainingConfig) -> None:
