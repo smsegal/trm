@@ -93,10 +93,3 @@ CONFIG_PRESETS: dict[str, Callable[[], TrainingConfig]] = {
     "gpu": gpu_workstation_config,
 }
 
-
-__all__ = [
-    "TrainingConfig",
-    "macbook_quickstart_config",
-    "gpu_workstation_config",
-    "CONFIG_PRESETS",
-]

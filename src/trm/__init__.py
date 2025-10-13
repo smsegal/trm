@@ -2,7 +2,7 @@
 
 from .config import TrainingConfig, gpu_workstation_config, macbook_quickstart_config
 from .model import TRM
-from .train import encode_board, encode_example, run_training
+from .training import encode_board, encode_example, run_training
 
 __version__ = "0.1.0"
 

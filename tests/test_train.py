@@ -2,19 +2,18 @@ import itertools
 
 import pytest
 import torch
-from torch.utils.data import DataLoader, IterableDataset
+from torch.utils.data import IterableDataset
 
-from trm.train import (
+from trm.config import TrainingConfig
+from trm.train import main, parse_args
+from trm.training import (
     BOARD_VOCAB,
     SUDOKU_SEQ_LEN,
-    TrainingConfig,
     build_dataloader,
     build_model,
     encode_board,
     encode_example,
     evaluate,
-    main,
-    parse_args,
     prepare_dataset,
     prepare_eval_dataset,
     resolve_device,
@@ -58,6 +57,30 @@ def test_encode_board_rejects_unknown_characters() -> None:
         encode_board("X" * SUDOKU_SEQ_LEN)
 
 
+class DummyBatchDataset:
+    def __init__(self, rows: list[dict[str, object]], batch_size: int, drop_last_batch: bool) -> None:
+        self._rows = rows
+        self._batch_size = batch_size
+        self._drop_last_batch = drop_last_batch
+
+    def __iter__(self):
+        batch: list[dict[str, object]] = []
+        for example in self._rows:
+            batch.append(example)
+            if len(batch) == self._batch_size:
+                yield self._collate(batch)
+                batch = []
+        if batch and not self._drop_last_batch:
+            yield self._collate(batch)
+
+    @staticmethod
+    def _collate(batch: list[dict[str, object]]) -> dict[str, list[object]]:
+        collated: dict[str, list[object]] = {}
+        for key in batch[0]:
+            collated[key] = [example[key] for example in batch]
+        return collated
+
+
 class DummyHFDataset:
     def __init__(self, rows: list[dict[str, str | list[int]]]) -> None:
         self._rows = rows
@@ -81,6 +104,9 @@ class DummyHFDataset:
     def map(self, func, remove_columns=None) -> "DummyHFDataset":
         mapped = [func(row) for row in self._rows]
         return DummyHFDataset(mapped)
+
+    def batch(self, batch_size: int, drop_last_batch: bool = False) -> DummyBatchDataset:
+        return DummyBatchDataset(self._rows, batch_size, drop_last_batch)
 
 
 def test_encode_example_returns_dict() -> None:
@@ -117,6 +143,9 @@ class DummyStreamingDataset:
         # For streaming datasets, map is lazy but we'll simulate it here
         return DummyStreamingMappedDataset(self._rows, func)
 
+    def batch(self, batch_size: int, drop_last_batch: bool = False) -> "DummyStreamingBatchedDataset":
+        return DummyStreamingBatchedDataset(self, batch_size, drop_last_batch)
+
 
 class DummyStreamingMappedDataset:
     def __init__(self, rows: list[dict[str, str | list[int]]], func) -> None:
@@ -126,6 +155,27 @@ class DummyStreamingMappedDataset:
     def __iter__(self):
         for row in itertools.cycle(self._rows):
             yield self._func(row)
+
+    def batch(self, batch_size: int, drop_last_batch: bool = False) -> "DummyStreamingBatchedDataset":
+        return DummyStreamingBatchedDataset(self, batch_size, drop_last_batch)
+
+
+class DummyStreamingBatchedDataset:
+    def __init__(self, dataset, batch_size: int, drop_last_batch: bool) -> None:
+        self._dataset = dataset
+        self._batch_size = batch_size
+        self._drop_last_batch = drop_last_batch
+
+    def __iter__(self):
+        iterator = iter(self._dataset)
+        batch: list[dict[str, object]] = []
+        for example in iterator:
+            batch.append(example)
+            if len(batch) == self._batch_size:
+                yield DummyBatchDataset._collate(batch)
+                batch = []
+        if batch and not self._drop_last_batch:
+            yield DummyBatchDataset._collate(batch)
 
 
 def test_sudoku_collate_fn_batches_examples() -> None:
@@ -252,18 +302,18 @@ def test_evaluate_returns_metrics() -> None:
     )
     model = build_model(config)
     sample = {"puzzle": encode_board(make_board(".")), "solution": encode_board(make_board("1"))}
-    dataloader = DataLoader([sample], batch_size=1, collate_fn=sudoku_collate_fn)
+    dataloader = build_dataloader(DummyHFDataset([sample]), config=config)
     metrics = evaluate(model, dataloader, device=torch.device("cpu"), config=config, max_batches=1)
     assert "loss" in metrics and "cell_accuracy" in metrics
 
 
 def test_build_dataloader_batches_items() -> None:
     config = TrainingConfig(batch_size=2)
-    dataset = [
+    dataset = DummyHFDataset([
         {"puzzle": encode_board(make_board(".")), "solution": encode_board(make_board("1"))},
         {"puzzle": encode_board(make_board(".2")), "solution": encode_board(make_board("2"))},
-    ]
-    dataloader = build_dataloader(dataset, config=config, is_streaming=False)
+    ])
+    dataloader = build_dataloader(dataset, config=config)
     puzzles, _ = next(iter(dataloader))
     assert puzzles.shape[0] == 2
 
@@ -279,6 +329,12 @@ def test_run_training_executes(monkeypatch: pytest.MonkeyPatch, sudoku_rows: lis
         def map(self, func, remove_columns=None) -> "FiniteStreamingMappedDataset":
             return FiniteStreamingMappedDataset(self._rows, func)
 
+        def batch(self, batch_size: int, drop_last_batch: bool = False) -> DummyStreamingBatchedDataset:
+            return DummyStreamingBatchedDataset(self, batch_size, drop_last_batch)
+
+        def batch(self, batch_size: int, drop_last_batch: bool = False) -> DummyStreamingBatchedDataset:
+            return DummyStreamingBatchedDataset(self, batch_size, drop_last_batch)
+
     class FiniteStreamingMappedDataset(IterableDataset):
         def __init__(self, rows: list[dict[str, str | list[int]]], func) -> None:
             super().__init__()
@@ -288,6 +344,12 @@ def test_run_training_executes(monkeypatch: pytest.MonkeyPatch, sudoku_rows: lis
         def __iter__(self):
             for row in self._rows:
                 yield self._func(row)
+
+        def batch(self, batch_size: int, drop_last_batch: bool = False) -> DummyStreamingBatchedDataset:
+            return DummyStreamingBatchedDataset(self, batch_size, drop_last_batch)
+
+        def batch(self, batch_size: int, drop_last_batch: bool = False) -> DummyStreamingBatchedDataset:
+            return DummyStreamingBatchedDataset(self, batch_size, drop_last_batch)
 
     def fake_load_dataset(name: str, split: str, streaming: bool = False):
         if streaming:
