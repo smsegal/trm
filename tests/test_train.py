@@ -356,6 +356,41 @@ def test_run_training_streaming(monkeypatch: pytest.MonkeyPatch, sudoku_rows: li
     run_training(config)
 
 
+def test_run_training_saves_checkpoints(monkeypatch: pytest.MonkeyPatch, tmp_path, sudoku_rows: list[dict[str, str]]) -> None:
+    def fake_load_dataset(name: str, split: str, streaming: bool = False):
+        return DummyHFDataset(sudoku_rows)
+
+    monkeypatch.setattr("trm.data.load_dataset", fake_load_dataset)
+    checkpoint_dir = tmp_path / "checkpoints"
+    config = TrainingConfig(
+        epochs=3,
+        batch_size=2,
+        learning_rate=1e-3,
+        hidden_dim=32,
+        n_layers=2,
+        num_heads=4,
+        latent_steps=1,
+        recurse=1,
+        max_train_samples=2,
+        max_steps_per_epoch=1,
+        log_every=1,
+        eval_split="train",
+        max_eval_samples=2,
+        eval_batches=1,
+        device="cpu",
+        checkpoint_dir=str(checkpoint_dir),
+        keep_last_n_checkpoints=2,
+        eval_preview_examples=0,
+    )
+    run_training(config)
+
+    epoch_checkpoints = sorted(checkpoint_dir.glob("epoch-*.pt"))
+    assert len(epoch_checkpoints) == 2
+    assert epoch_checkpoints[0].name.endswith("0002.pt")
+    assert epoch_checkpoints[1].name.endswith("0003.pt")
+    assert (checkpoint_dir / "best.pt").exists()
+
+
 def test_parse_args_and_main(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, TrainingConfig] = {}
 

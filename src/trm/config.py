@@ -33,6 +33,11 @@ class TrainingConfig:
     seed: int = 42
     num_workers: int = 0
     device: str = "auto"
+    checkpoint_dir: str | None = None
+    keep_last_n_checkpoints: int = 0
+    checkpoint_metric: str = "cell_accuracy"
+    checkpoint_metric_higher_is_better: bool = True
+    eval_preview_examples: int = 2
 
 
 def macbook_quickstart_config(**overrides: Any) -> TrainingConfig:
