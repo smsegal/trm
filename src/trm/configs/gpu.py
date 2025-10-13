@@ -14,7 +14,7 @@ def build() -> TrainingConfig:
         weight_decay=0.01,
         hidden_dim=256,
         n_layers=6,
-        num_heads=None,
+        num_heads=8,
         dropout=0.1,
         latent_steps=4,
         recurse=6,
