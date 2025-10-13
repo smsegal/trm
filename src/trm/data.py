@@ -52,7 +52,9 @@ def prepare_ds(
     if num_proc == -1:
         # if os.cpu_count can't return a count, just assume 0?
         num_proc = os.cpu_count() or 0
-    dataset = dataset.map(mapper, fn_kwargs={"columns": columns}, num_proc=num_proc, batched=True).shuffle(seed)
+    dataset = dataset.map(
+        mapper, fn_kwargs={"columns": columns}, num_proc=num_proc, batched=True, remove_columns=dataset.column_names
+    ).with_format("torch")
     return dataset
 
 
@@ -61,4 +63,4 @@ def build_dataloader(dataset: Dataset, batch_size: int, device: torch.device = t
     if num_proc == -1:
         # if os.cpu_count can't return a count, just assume 0?
         num_proc = os.cpu_count() or 0
-    return dataset.batch(batch_size=batch_size, num_proc=num_proc).with_format("torch", device=device)
+    return dataset.batch(batch_size=batch_size, num_proc=num_proc).shuffle().with_format("torch")

@@ -163,9 +163,9 @@ def evaluate(
     preview_examples: list[tuple[list[int], list[int], list[int]]] = []
     preview_limit = max(0, config.eval_preview_examples)
 
-    for batch_puzzles, batch_solutions in dataloader:
-        puzzles = batch_puzzles.to(device)
-        solutions = batch_solutions.to(device)
+    for batch in dataloader:
+        puzzles = batch["x"].to(device)
+        solutions = batch["y"].to(device)
         x_hidden = model.embedding(puzzles)
         zeros = torch.zeros_like(x_hidden)
         _, _, lm_logits, _ = model.deep_recursion(
@@ -285,7 +285,9 @@ def run_training(config: TrainingConfig) -> None:
 
     eval_dataset = None
     if config.data.eval_split is not None and not config.data.streaming:
-        eval_dataset = prepare_ds(config.data.dataset_name, config.data.eval_split, columns=config.data.columns)
+        eval_dataset = prepare_ds(
+            config.data.dataset_name, config.data.eval_split, columns=config.data.columns, mapper=tokenize
+        )
 
     for epoch in range(config.epochs):
         model.train()
@@ -303,7 +305,9 @@ def run_training(config: TrainingConfig) -> None:
             dynamic_ncols=True,
         )
         try:
-            for x_input, y_labels in progress_bar:
+            for batch in progress_bar:
+                x_input = batch["x"].to(device)
+                y_labels = batch["y"].to(device)
                 step_start = perf_counter()
                 loss, halting_logits = training_step(
                     model,
