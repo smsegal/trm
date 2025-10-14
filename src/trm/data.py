@@ -1,8 +1,7 @@
 """Data processing utilities for TRM models."""
 
 import os
-from collections.abc import Sequence
-from typing import Callable
+from collections.abc import Callable, Sequence
 
 import torch
 from datasets import Dataset, load_dataset
