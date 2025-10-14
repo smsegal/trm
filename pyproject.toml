@@ -20,6 +20,7 @@ dependencies = [
     "rich>=14.2.0",
     "tqdm>=4.67.1",
     "wandb>=0.22.2",
+    "tyro>=0.9.35",
 ]
 
 [project.optional-dependencies]

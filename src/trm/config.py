@@ -7,23 +7,29 @@ from typing import Any
 
 @dataclass
 class DataConfig:
-    dataset_name: str
-    train_split: str
-    eval_split: str
-    columns: dict[str, str]
-    streaming: bool = field(default=False)
+    """Dataset configuration."""
+
+    dataset_name: str = field(default="sapientinc/sudoku-extreme", metadata={"help": "Name of the dataset to use"})
+    train_split: str = field(default="train", metadata={"help": "Training split name"})
+    eval_split: str = field(default="test", metadata={"help": "Evaluation split name"})
+    columns: dict[str, str] = field(
+        default_factory=lambda: {"x": "question", "y": "answer"}, metadata={"help": "Column mapping for dataset"}
+    )
+    streaming: bool = field(default=False, metadata={"help": "Use streaming for dataset loading"})
 
 
 @dataclass
 class ModelConfig:
-    hidden_dim: int
-    n_layers: int
-    num_heads: int
-    dropout: float
-    latent_steps: int
-    recurse: int
-    max_position_embeddings: int
-    rope_base: float
+    """Model configuration."""
+
+    hidden_dim: int = field(default=128, metadata={"help": "Hidden dimension size"})
+    n_layers: int = field(default=2, metadata={"help": "Number of transformer layers"})
+    num_heads: int = field(default=4, metadata={"help": "Number of attention heads"})
+    dropout: float = field(default=0.0, metadata={"help": "Dropout probability"})
+    latent_steps: int = field(default=4, metadata={"help": "Number of latent steps"})
+    recurse: int = field(default=2, metadata={"help": "Recursion depth"})
+    max_position_embeddings: int = field(default=2048, metadata={"help": "Maximum position embeddings"})
+    rope_base: float = field(default=10000.0, metadata={"help": "RoPE base value"})
 
 
 DefaultModelConfig = ModelConfig(
@@ -48,27 +54,35 @@ SudokuDatasetConfig = DataConfig(
 
 @dataclass
 class TrainingConfig:
-    data: DataConfig
-    model: ModelConfig
-    batch_size: int
-    num_workers: int
-    epochs: int
-    learning_rate: float
-    weight_decay: float
-    max_grad_norm: float
-    log_every: int
-    max_train_samples: int | None
-    max_steps_per_epoch: int | None
-    max_eval_samples: int | None
-    eval_batches: int | None
-    streaming: bool
-    seed: int
-    device: str
-    checkpoint_dir: str | None
-    keep_last_n_checkpoints: int
-    checkpoint_metric: str
-    checkpoint_metric_higher_is_better: bool
-    eval_preview_examples: int
+    """Configuration for TRM training."""
+
+    # Config preset to use
+    config: str = field(default="macbook", metadata={"help": "Choose a preset configuration (macbook, gpu)"})
+    data: DataConfig = field(default_factory=lambda: SudokuDatasetConfig, metadata={"help": "Dataset configuration"})
+    model: ModelConfig = field(default_factory=lambda: DefaultModelConfig, metadata={"help": "Model configuration"})
+    batch_size: int = field(default=16, metadata={"help": "Batch size for training"})
+    num_workers: int = field(default=0, metadata={"help": "Number of workers for data loading"})
+    epochs: int = field(default=4, metadata={"help": "Number of training epochs"})
+    learning_rate: float = field(default=5e-4, metadata={"help": "Learning rate for the optimizer"})
+    weight_decay: float = field(default=0.0, metadata={"help": "Weight decay for regularization"})
+    max_grad_norm: float = field(default=1.0, metadata={"help": "Maximum gradient norm for clipping"})
+    log_every: int = field(default=10, metadata={"help": "Log every N steps"})
+    max_train_samples: int | None = field(default=512, metadata={"help": "Maximum number of training samples"})
+    max_steps_per_epoch: int | None = field(default=1000, metadata={"help": "Maximum steps per epoch"})
+    max_eval_samples: int | None = field(default=256, metadata={"help": "Maximum number of evaluation samples"})
+    eval_batches: int | None = field(default=4, metadata={"help": "Number of evaluation batches"})
+    streaming: bool = field(default=False, metadata={"help": "Use streaming for dataset loading"})
+    seed: int = field(default=19, metadata={"help": "Random seed for reproducibility"})
+    device: str = field(default="auto", metadata={"help": "Device to run training on (auto, cpu, cuda)"})
+    checkpoint_dir: str | None = field(
+        default="checkpoints/macbook", metadata={"help": "Directory to save checkpoints"}
+    )
+    keep_last_n_checkpoints: int = field(default=2, metadata={"help": "Keep last N checkpoints"})
+    checkpoint_metric: str = field(default="accuracy", metadata={"help": "Metric to use for checkpointing"})
+    checkpoint_metric_higher_is_better: bool = field(
+        default=True, metadata={"help": "Whether higher metric values are better"}
+    )
+    eval_preview_examples: int = field(default=3, metadata={"help": "Number of examples to preview during evaluation"})
 
 
 DefaultTrainingConfig = TrainingConfig(
