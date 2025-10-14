@@ -10,6 +10,7 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 from tqdm.auto import tqdm
+import wandb
 
 from .config import TrainingConfig
 from .data import BOARD_VOCAB, SUDOKU_SEQ_LEN, build_dataloader, decode_board, prepare_ds, tokenize
@@ -79,7 +80,7 @@ class CheckpointManager:
         model: TRM,
         optimizer: torch.optim.Optimizer,
         metrics: dict[str, Any] | None,
-    ) -> None:
+    ) -> bool:
         payload = {
             "epoch": epoch,
             "model_state_dict": model.state_dict(),
@@ -107,12 +108,14 @@ class CheckpointManager:
             metric_value = metrics[self.metric_name]
 
         if metric_value is None:
-            return
+            return False
 
         metric_float = float(metric_value)
         if self._is_better(metric_float):
             torch.save(payload, self.best_path)
             self.best_metric = metric_float
+            return True
+        return False
 
 
 def training_step(
@@ -274,6 +277,13 @@ def run_training(config: TrainingConfig) -> None:
         weight_decay=config.weight_decay,
     )
 
+    if config.wandb_enabled:
+        wandb.init(
+            project=config.wandb_project,
+            name=config.wandb_name,
+        )
+        wandb.config.update(config.__dict__)
+
     checkpoint_manager: CheckpointManager | None = None
     if config.checkpoint_dir is not None:
         checkpoint_manager = CheckpointManager(
@@ -296,6 +306,7 @@ def run_training(config: TrainingConfig) -> None:
         time_window: deque[float] = deque(maxlen=max(1, config.log_every))
         steps = 0
         epoch_metrics: dict[str, float] | None = None
+        global_step = 0
         progress_total = config.max_steps_per_epoch or steps_per_epoch_estimate
         progress_bar = tqdm(
             dataloader,
@@ -330,6 +341,15 @@ def run_training(config: TrainingConfig) -> None:
                     halting_metric = float(halting_logits.detach().max().item())
                 else:
                     halting_metric = float(halting_logits)
+                if config.wandb_enabled:
+                    wandb.log({
+                        "train/loss": mean_loss,
+                        "train/step_time": mean_step_time,
+                        "train/halting_metric": halting_metric,
+                        "epoch": epoch + 1,
+                        "step": global_step,
+                    })
+                global_step += 1
                 if (
                     halting_metric > 0
                     and config.max_steps_per_epoch is not None
@@ -357,10 +377,18 @@ def run_training(config: TrainingConfig) -> None:
                 f"[Epoch {epoch + 1}] Evaluation - loss {epoch_metrics['loss']:.4f}, "
                 f"cell accuracy {epoch_metrics['cell_accuracy'] * 100:.2f}%"
             )
+            if config.wandb_enabled:
+                wandb.log({
+                    "eval/loss": epoch_metrics["loss"],
+                    "eval/cell_accuracy": epoch_metrics["cell_accuracy"],
+                    "epoch": epoch + 1,
+                })
         if checkpoint_manager is not None:
-            checkpoint_manager.save(
+            is_best = checkpoint_manager.save(
                 epoch=epoch + 1,
                 model=model,
                 optimizer=optimizer,
                 metrics=epoch_metrics,
             )
+            if config.wandb_enabled and config.wandb_log_model and is_best:
+                wandb.log_model(checkpoint_manager.best_path, "best_model")
