@@ -68,11 +68,12 @@ def _predict_solution(
     with torch.no_grad():
         puzzle = torch.tensor(sample.encoded_puzzle, dtype=torch.long, device=device).unsqueeze(0)
         x_hidden = model.embedding(puzzle)
-        zeros = torch.zeros_like(x_hidden)
+        batch_size, seq_len, _ = x_hidden.shape
+        y_init, z_init = model.get_init_state(batch_size, seq_len)
         _, _, lm_logits, _ = model.deep_recursion(
             x_hidden,
-            zeros,
-            zeros,
+            y_init,
+            z_init,
             n=config.latent_steps,
             recurse=config.recurse,
         )

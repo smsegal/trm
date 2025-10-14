@@ -170,6 +170,22 @@ class TRM(nn.Module):
         self.layers = nn.ModuleList([TRMBlock(hidden_dim, num_heads, dropout=dropout) for _ in range(n_layers)])
         self.max_position_embeddings = max_position_embeddings
 
+        # Learned initialization tensors for y and z, shaped [1, max_seq, hidden_dim]
+        # These are broadcast to the batch dimension
+        self.y_init = nn.Parameter(torch.randn(1, max_position_embeddings, hidden_dim) * 0.02)
+        self.z_init = nn.Parameter(torch.randn(1, max_position_embeddings, hidden_dim) * 0.02)
+
+    @beartype
+    def get_init_state(self, batch_size: int, seq_len: int) -> tuple[HiddenState, HiddenState]:
+        """Get initialized y and z states for a given batch and sequence length.
+
+        Returns learned initialization tensors broadcast to the batch dimension
+        and sliced to the sequence length.
+        """
+        y_init: HiddenState = self.y_init[:, :seq_len, :].expand(batch_size, -1, -1)
+        z_init: HiddenState = self.z_init[:, :seq_len, :].expand(batch_size, -1, -1)
+        return y_init, z_init
+
     @staticmethod
     def _build_rotary_cache(
         *,
@@ -193,15 +209,12 @@ class TRM(nn.Module):
         self,
         x: HiddenState,
         y: HiddenState,
-        z: HiddenState | None = None,
+        z: HiddenState,
         position_ids: Tokens | None = None,
     ) -> tuple[HiddenState, HiddenState]:
         batch, seq_len, _ = x.shape
         if seq_len > self.max_position_embeddings:
             raise ValueError(f"input sequence length {seq_len} exceeds maximum {self.max_position_embeddings}.")
-        
-        if z is None:
-            z = torch.zeros_like(x)
 
         if position_ids is None:
             position_ids = torch.arange(seq_len, device=x.device).unsqueeze(0).expand(batch, -1)

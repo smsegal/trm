@@ -22,10 +22,10 @@ def small_trm() -> TRM:
 def test_forward_accepts_token_and_hidden_inputs(small_trm: TRM) -> None:
     torch.manual_seed(1)
     batch, seq_len = 2, 5
-    x_tokens = torch.randint(0, small_trm.embedding.num_embeddings, (batch, seq_len), dtype=torch.long)
-    y_hidden = torch.randn(batch, seq_len, small_trm.embedding.embedding_dim)
+    x_hidden = small_trm.embedding(torch.randint(0, small_trm.embedding.num_embeddings, (batch, seq_len), dtype=torch.long))
+    y_init, z_init = small_trm.get_init_state(batch, seq_len)
 
-    y_state, z_state = small_trm(x_tokens, y_hidden, None)
+    y_state, z_state = small_trm(x_hidden, y_init, z_init)
 
     expected_shape = (batch, seq_len, small_trm.embedding.embedding_dim)
     assert y_state.shape == expected_shape
@@ -40,13 +40,12 @@ def test_deep_recursion_returns_stable_logits(small_trm: TRM) -> None:
     batch, seq_len = 2, 6
     x_tokens = torch.randint(0, small_trm.embedding.num_embeddings, (batch, seq_len), dtype=torch.long)
     x_hidden = small_trm.embedding(x_tokens)
-    y_hidden = torch.zeros_like(x_hidden)
-    z_hidden = torch.zeros_like(x_hidden)
+    y_init, z_init = small_trm.get_init_state(batch, seq_len)
 
     y_state, z_state, lm_logits, q_logits = small_trm.deep_recursion(
         x_hidden,
-        y_hidden,
-        z_hidden,
+        y_init,
+        z_init,
         n=2,
         recurse=2,
     )

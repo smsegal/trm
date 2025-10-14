@@ -127,11 +127,12 @@ def training_step(
     config: TrainingConfig,
 ) -> tuple[float, Tensor | float]:
     x_hidden = model.embedding(x)
-    zeros = torch.zeros_like(x_hidden)
+    batch_size, seq_len, _ = x_hidden.shape
+    y_init, z_init = model.get_init_state(batch_size, seq_len)
     y, z, y_hat, q_hat = model.deep_recursion(
         x_hidden,
-        zeros,
-        zeros,
+        y_init,
+        z_init,
         n=config.model.latent_steps,
         recurse=config.model.recurse,
     )
@@ -170,11 +171,12 @@ def evaluate(
         puzzles = batch["x"].to(device)
         solutions = batch["y"].to(device)
         x_hidden = model.embedding(puzzles)
-        zeros = torch.zeros_like(x_hidden)
+        batch_size, seq_len, _ = x_hidden.shape
+        y_init, z_init = model.get_init_state(batch_size, seq_len)
         _, _, lm_logits, _ = model.deep_recursion(
             x_hidden,
-            zeros,
-            zeros,
+            y_init,
+            z_init,
             n=config.model.latent_steps,
             recurse=config.model.recurse,
         )
