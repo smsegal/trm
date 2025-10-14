@@ -83,7 +83,6 @@ class TrainingConfig:
         default=True, metadata={"help": "Whether higher metric values are better"}
     )
     eval_preview_examples: int = field(default=3, metadata={"help": "Number of examples to preview during evaluation"})
-    wandb_enabled: bool = field(default=False, metadata={"help": "Enable wandb logging"})
     wandb_project: str = field(default="trm-training", metadata={"help": "Wandb project name"})
     wandb_name: str | None = field(default=None, metadata={"help": "Wandb run name (auto-generated if None)"})
     wandb_log_model: bool = field(default=False, metadata={"help": "Log model artifacts to wandb"})
@@ -109,20 +108,19 @@ DefaultTrainingConfig = TrainingConfig(
     checkpoint_dir="checkpoints/macbook",
     keep_last_n_checkpoints=2,
     checkpoint_metric="accuracy",
-        checkpoint_metric_higher_is_better=True,
-        eval_preview_examples=3,
-        wandb_enabled=False,
-        wandb_project="trm-training",
-        wandb_name=None,
-        wandb_log_model=False,
-    )
+    checkpoint_metric_higher_is_better=True,
+    eval_preview_examples=3,
+    wandb_project="trm-training",
+    wandb_name=None,
+    wandb_log_model=False,
+)
 
 
 def apply_overrides(base: TrainingConfig, overrides: dict[str, Any]) -> TrainingConfig:
     if not overrides:
         return base
 
-    training_field_names = {field.name for field in fields(TrainingConfig) if field.name not in {"data", "model", "wandb_enabled", "wandb_project", "wandb_name", "wandb_log_model"}}
+    training_field_names = {field.name for field in fields(TrainingConfig) if field.name not in {"data", "model"}}
     model_field_names = {field.name for field in fields(ModelConfig)}
     data_field_names = {field.name for field in fields(DataConfig)}
 

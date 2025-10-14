@@ -139,7 +139,7 @@ def training_step(
         y_hat.reshape(-1, y_hat.size(-1)),
         y_true.view(-1),
     )
-    loss_halt = F.binary_cross_entropy(q_hat.squeeze(dim=-1), (y_hat.argmax(dim=-1) == y_true))
+    loss_halt = F.binary_cross_entropy(q_hat.squeeze(dim=-1), (y_hat.argmax(dim=-1) == y_true).float())
     loss = loss_class + loss_halt
     loss.backward()
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=config.max_grad_norm)
@@ -277,12 +277,11 @@ def run_training(config: TrainingConfig) -> None:
         weight_decay=config.weight_decay,
     )
 
-    if config.wandb_enabled:
-        wandb.init(
-            project=config.wandb_project,
-            name=config.wandb_name,
-        )
-        wandb.config.update(config.__dict__)
+    wandb.init(
+        project=config.wandb_project,
+        name=config.wandb_name,
+    )
+    wandb.config.update(config.__dict__)
 
     checkpoint_manager: CheckpointManager | None = None
     if config.checkpoint_dir is not None:
@@ -341,14 +340,13 @@ def run_training(config: TrainingConfig) -> None:
                     halting_metric = float(halting_logits.detach().max().item())
                 else:
                     halting_metric = float(halting_logits)
-                if config.wandb_enabled:
-                    wandb.log({
-                        "train/loss": mean_loss,
-                        "train/step_time": mean_step_time,
-                        "train/halting_metric": halting_metric,
-                        "epoch": epoch + 1,
-                        "step": global_step,
-                    })
+                wandb.log({
+                    "train/loss": mean_loss,
+                    "train/step_time": mean_step_time,
+                    "train/halting_metric": halting_metric,
+                    "epoch": epoch + 1,
+                    "step": global_step,
+                })
                 global_step += 1
                 if (
                     halting_metric > 0
@@ -377,12 +375,11 @@ def run_training(config: TrainingConfig) -> None:
                 f"[Epoch {epoch + 1}] Evaluation - loss {epoch_metrics['loss']:.4f}, "
                 f"cell accuracy {epoch_metrics['cell_accuracy'] * 100:.2f}%"
             )
-            if config.wandb_enabled:
-                wandb.log({
-                    "eval/loss": epoch_metrics["loss"],
-                    "eval/cell_accuracy": epoch_metrics["cell_accuracy"],
-                    "epoch": epoch + 1,
-                })
+            wandb.log({
+                "eval/loss": epoch_metrics["loss"],
+                "eval/cell_accuracy": epoch_metrics["cell_accuracy"],
+                "epoch": epoch + 1,
+            })
         if checkpoint_manager is not None:
             is_best = checkpoint_manager.save(
                 epoch=epoch + 1,
@@ -390,5 +387,5 @@ def run_training(config: TrainingConfig) -> None:
                 optimizer=optimizer,
                 metrics=epoch_metrics,
             )
-            if config.wandb_enabled and config.wandb_log_model and is_best:
+            if config.wandb_log_model and is_best:
                 wandb.log_model(checkpoint_manager.best_path, "best_model")
