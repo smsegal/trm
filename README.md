@@ -1,8 +1,6 @@
 # Tiny Reasoning Models (TRM)
 
-This repository contains a reference implementation of the Tiny Reasoning Models architecture, including
-training utilities for Sudoku-style sequence modeling. The project is managed with `uv`, linted with `ruff`,
-and type-checked with `basedpyright`.
+This repository contains a reimplementation of the Tiny Reasoning Models paper (Jolicoeur-Martineau, Alexia. “Less Is More: Recursive Reasoning with Tiny Networks.” arXiv:2510.04871. Preprint, arXiv, October 6, 2025. https://doi.org/10.48550/arXiv.2510.04871.) 
 
 ## Environment Setup
 
