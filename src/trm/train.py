@@ -1,4 +1,9 @@
-"""CLI entrypoint for running TRM training jobs."""
+"""CLI entrypoint for running TRM training jobs.
+
+Note: You may see pydantic warnings from tyro's dataclass conversion.
+These are harmless. To suppress them, run with:
+    python -W ignore::UserWarning -m trm.train
+"""
 
 import tyro
 from collections.abc import Sequence
