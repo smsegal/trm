@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(jj workspace add:*)",
+      "Read(//Users/shanesegal/projects/trm-tyro/**)",
+      "Bash(jj workspace:*)",
+      "Bash(uv pip install:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

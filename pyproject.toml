@@ -25,7 +25,9 @@ dependencies = [
 
 [project.optional-dependencies]
 test = [
+    "coverage>=7.10.7",
     "pytest>=8.4.2",
+    "pytest-cov>=7.0.0",
 ]
 
 

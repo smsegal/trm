@@ -35,19 +35,19 @@
 - Include in every PR: purpose, key changes, test results (paste command output), and performance notes when model behavior changes.
 - Request review before merging and wait for CI to pass, or explain any required skips explicitly.
 
-## Version Control (jj)
-- We manage history with [Jujutsu (`jj`)](https://github.com/martinvonz/jj); avoid direct `git` commands to keep the changeop stack clean.
+## Version Control
+- The main repository uses [Jujutsu (`jj`)](https://github.com/martinvonz/jj) for history management; avoid direct `git` commands in the main repo to keep the changeop stack clean.
 - `jj status` reveals working-copy changes, and `jj diff` shows the staged diff before committing.
 - Create commits with `jj commit -m "Descriptive message"`; ensure the working copy (`@`) is clean before handing off.
+- For feature development worktrees, use standard `git` commands as they are separate Git repositories linked to the main repo.
 - The project history expects short, imperative commit messages—mirror the existing style when crafting new commits.
 
 ## Feature Development Workflow
-- When implementing a feature, create a dedicated `jj workspace` in a sibling directory (e.g., `jj workspace add ../feature-name`). Work there until the feature is ready to merge back.
-- Use `jj workspace list` to confirm active workspaces and note that `jj log` will display workspace-specific commits as `<workspace>@` entries.
-- `jj workspace root` reports the filesystem root for the current workspace; use it when scripting or aligning tooling.
-- Keep workspace names meaningful; `jj workspace rename <new-name>` is available if requirements change, and `jj workspace forget <name>` removes stale entries once merged.
-- If a workspace reports as stale after upstream changes, run `jj workspace update-stale <name>` to resync its working-copy commit.
-- Reuse the existing `uv`-managed virtualenv for testing. Adjust `PYTHONPATH` or use `uv run` so the editable install resolves modules from your workspace.
-- If the feature requires divergent dependency versions, create an additional environment via `uv venv` scoped to that workspace. Document why the extra environment is necessary.
+- When implementing a feature, create a dedicated git worktree in a sibling directory (e.g., `git worktree add ../feature-name`). Work there until the feature is ready to merge back.
+- In the main repository, use `jj` commands for version control. In worktrees, use standard `git` commands as they are separate Git repositories.
+- Use `git worktree list` to confirm active worktrees and `git log` to view commits in the worktree.
+- Reuse the existing `uv`-managed virtualenv for testing. Adjust `PYTHONPATH` or use `uv run` so the editable install resolves modules from your worktree.
+- If the feature requires divergent dependency versions, create an additional environment via `uv venv` scoped to that worktree. Document why the extra environment is necessary.
 - Always manage virtual environments with `uv`; keep `.envrc` in sync so contributors automatically load the intended toolchain.
 - Do not introduce hardcoded virtualenv paths—rely on environment activation (`direnv`, `uv run`, `source .venv/bin/activate`) to locate executables.
+- When finished with a worktree, remove it with `git worktree remove <path>` after merging changes back to the main branch.
